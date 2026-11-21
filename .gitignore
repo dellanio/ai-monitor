@@ -1,0 +1,17 @@
+.pio/
+__pycache__/
+*.pyc
+.pytest_cache/
+hub/config.local.yaml
+hub/.venv/
+
+# configuração e segredos locais (nunca no git)
+hub/config.yaml
+.env
+.env.*
+*.env
+*token*
+!**/*token*.py
+*.bin
+*.csv
+.venv/

@@ -1,0 +1,136 @@
+<!doctype html>
+<html lang="pt-BR"><head><meta charset="utf-8">
+<title>AI Monitor v0.2 — preview do firmware</title>
+<style>
+  .wrap{display:flex;flex-wrap:wrap;gap:20px;align-items:flex-start;padding:4px 0}
+  .dev{background:#1b1b22;border-radius:22px;padding:18px 18px 26px;box-shadow:0 0 0 2px #333 inset}
+  canvas{display:block;width:640px;height:480px;max-width:100%;height:auto;aspect-ratio:4/3;image-rendering:pixelated;border-radius:6px;cursor:pointer;background:#0a081c}
+  .side{display:flex;flex-direction:column;gap:12px;min-width:240px;max-width:380px}
+  .grp b{display:block;font-size:12px;opacity:.7;margin-bottom:6px;text-transform:uppercase;letter-spacing:.06em}
+  .btns{display:flex;flex-wrap:wrap;gap:6px}
+  button{font:inherit;font-size:13px;padding:5px 10px;border-radius:8px;border:1px solid var(--border,#444);background:var(--card,#222);color:var(--foreground,#eee);cursor:pointer}
+  button.on{border-color:var(--accent,#9c74ff);box-shadow:0 0 0 1px var(--accent,#9c74ff) inset}
+  .note{font-size:12px;color:var(--muted-foreground,#999);line-height:1.45}
+  .lbl{font-size:11px;color:#888;text-align:center;margin-top:8px}
+</style></head><body>
+<div class="wrap">
+  <div class="dev"><canvas id="c" width="320" height="240"></canvas><div class="lbl">M5Stack CoreS3 · 320×240 · clique na tela = toque</div></div>
+  <div class="side">
+    <div class="grp"><b>Tela</b><div class="btns" id="scr"></div></div>
+    <div class="grp"><b>Cenário (estado do Hub)</b><div class="btns" id="cen"></div></div>
+    <div class="grp"><b>Hub</b><div class="btns"><button id="act">Aprovar pelo toque: desligado</button></div></div>
+    <div class="note">Simulação do layout de <code>src/ui.cpp</code>. Fontes do navegador (no aparelho: FreeSans/Font0 do M5GFX), cores e posições iguais. Rosto = GIFs reais da Nous‑Girl tingidos pela cor do estado. Não é captura do aparelho.</div>
+  </div>
+</div>
+<script>
+const FR=/*FRAMES*/null;
+const c=document.getElementById('c'),g=c.getContext('2d');
+const C={BG:'#0a081c',BG2:'#140e30',PANEL:'#1a1638',PANEL2:'#262050',BORDER:'#403878',TEXT:'#eeecff',MUTED:'#928cc4',
+ WORK:'#50e8aa',NEED:'#ffb840',FIN:'#60b0ff',IDLE:'#706a98',ACC:'#9c74ff',DANGER:'#ff5c70'};
+const LINE='#100c28';
+const INK={neutral:'#e8e4ff',thinking:'#b0f0ff',listening:'#ffd680',happy:'#b0d2ff',sad:'#bcbacc',sleeping:'#b8a8ec',look_left:'#e8e4ff',look_right:'#e8e4ff'};
+const STL={working:['TRABALHANDO',C.WORK],needyou:['PRECISA DE VOCE',C.NEED],finished:['TERMINOU',C.FIN],idle:['PARADA',C.IDLE]};
+const SRC={hermes:C.ACC,claude:'#ff9260',codex:'#78d2ff',timon:'#f4c45c'};
+let screen='list', scen='trabalhando', actions=false, page=0, sel=0, t0=performance.now();
+const S={
+ trabalhando:{hub:true,sess:[
+  {t:'Portal imobiliário',s:'claude',p:'portal',st:'working',d:'editando src/api/imoveis.ts'},
+  {t:'Kanban: AJUSTE matrix',s:'hermes',p:'fabrica',st:'working',d:'rodando testes (42/60)'},
+  {t:'Calcada portuguesa e luz',s:'timon',p:'game-domino-3d.coder',st:'working',d:'12 ferramentas · coder · sonnet'},
+  {t:'OmiDiario export',s:'hermes',p:'default',st:'idle',d:'aguardando próximo lote'},
+  {t:'Refactor hub',s:'codex',p:'dell-monitor',st:'finished',d:'15 testes passaram'}],lim:[34,61]},
+ precisa:{hub:true,sess:[
+  {t:'Deploy tech-woman',s:'claude',p:'tech-woman',st:'needyou',d:'pedindo permissão: Bash'},
+  {t:'Kanban: AJUSTE matrix',s:'hermes',p:'fabrica',st:'working',d:'rodando testes (42/60)'}],lim:[72,88],
+  ap:{cmd:'git push origin main && ssh oci "systemctl restart tech-woman"',desc:'Publicar a versão 1.4 no servidor OCI'}},
+ terminou:{hub:true,sess:[{t:'Relatório semanal',s:'hermes',p:'default',st:'finished',d:'entregue no Telegram'}],lim:[20,40],happy:true},
+ ocioso:{hub:true,sess:[],lim:[5,22],sleep:false},
+ dormindo:{hub:true,sess:[],lim:[5,22],sleep:true},
+ semhub:{hub:false,sess:[],lim:null},
+};
+const imgs={};
+for(const m in FR){imgs[m]=FR[m].map(([b,d])=>{const i=new Image();i.src='data:image/png;base64,'+b;return {i,d}})}
+// tinted cache
+const tint={};
+function tinted(m,k,ink,line=LINE){const key=m+k+ink+line;if(tint[key])return tint[key];const im=imgs[m][k].i;if(!im.complete)return null;
+ const o=document.createElement('canvas');o.width=320;o.height=240;const x=o.getContext('2d');x.drawImage(im,0,0);
+ const d=x.getImageData(0,0,320,240),p=d.data,bg=hex(ink),ik=hex(line);
+ for(let j=0;j<p.length;j+=4){const t=(255-p[j])/255;p[j]=bg[0]+(ik[0]-bg[0])*t;p[j+1]=bg[1]+(ik[1]-bg[1])*t;p[j+2]=bg[2]+(ik[2]-bg[2])*t}
+ x.putImageData(d,0,0);return tint[key]=o}
+function hex(h){return [1,3,5].map(i=>parseInt(h.substr(i,2),16))}
+function mix(a,b,t){const A=hex(a),B=hex(b);return 'rgb('+A.map((v,i)=>Math.round(v+(B[i]-v)*t)).join(',')+')'}
+function rr(x,y,w,h,r,fill,stroke,lw=1){g.beginPath();g.roundRect(x,y,w,h,r);if(fill){g.fillStyle=fill;g.fill()}if(stroke){g.lineWidth=lw;g.strokeStyle=stroke;g.stroke()}}
+function txt(s,x,y,col,f='11px sans-serif',al='left',base='top'){g.font=f;g.fillStyle=col;g.textAlign=al;g.textBaseline=base;g.fillText(s,x,y)}
+function fit(s,w,f){g.font=f;if(g.measureText(s).width<=w)return s;while(s.length>1&&g.measureText(s+'..').width>w)s=s.slice(0,-1);return s+'..'}
+const F={b9:'bold 13px Arial',b12:'bold 17px Arial',s9:'13px Arial',f0:'9px monospace',f2:'12px Arial',mono:'12px Consolas,monospace'};
+function clock(){const d=new Date();return String(d.getHours()).padStart(2,'0')+':'+String(d.getMinutes()).padStart(2,'0')}
+function mood(){const s=S[scen];if(s.ap||s.sess.some(x=>x.st=='needyou'))return 'listening';if(!s.hub)return 'sad';if(s.happy)return 'happy';
+ if(s.sess.some(x=>x.st=='working'))return 'thinking';if(s.sleep)return 'sleeping';return 'neutral'}
+function avatar(x,y,size,ink,line=LINE){const bg=ink;const im=tinted('neutral',0,ink,line);if(!im)return;g.save();g.beginPath();g.arc(x+size/2,y+size/2,size/2,0,7);g.clip();
+ g.fillStyle=bg;g.fillRect(x,y,size,size);g.drawImage(im,44,36,150,150,x,y,size,size);g.restore();g.beginPath();g.arc(x+size/2,y+size/2,size/2,0,7);g.strokeStyle=ink;g.lineWidth=1;g.stroke()}
+const STARS=[[14,70],[296,64],[270,112],[40,150],[300,160],[160,200],[120,64],[222,150],[84,186],[248,196],[190,92],[58,104]];
+function bgd(now){const gr=g.createLinearGradient(0,0,0,240);gr.addColorStop(0,C.BG);gr.addColorStop(1,C.BG2);g.fillStyle=gr;g.fillRect(0,0,320,240);
+ const t=Math.floor(now/400);STARS.forEach(([x,y],i)=>{const hi=(t+i*7)%9==0;g.fillStyle=hi?'#fff':mix(C.BG2,C.FIN,.43);g.fillRect(x,y,1,1);if(hi){g.fillStyle=mix(C.BG,C.FIN,.63);g.fillRect(x-1,y,1,1);g.fillRect(x+1,y,1,1);g.fillRect(x,y-1,1,1);g.fillRect(x,y+1,1,1)}})}
+function dotCol(){return S[scen].hub?C.WORK:C.DANGER}
+function header(){const s=S[scen];avatar(5,3,28,INK[mood()]);txt('AI Monitor',40,4,C.TEXT,F.b9);
+ let sub,sc=C.MUTED;if(!s.hub){sub='Hub desconectado';sc=C.NEED}else{const nw=s.sess.filter(x=>x.st=='working').length,nn=s.sess.filter(x=>x.st=='needyou').length;sub=nw+' trabalhando';if(nn){sub+=' - '+nn+' precisa de voce';sc=C.NEED}}
+ txt(fit(sub,150,F.f0),41,22,sc,F.f0);g.font=F.b12;const ck=clock(),cw=g.measureText(ck).width;txt(ck,314,8,C.TEXT,F.b12,'right');
+ g.beginPath();g.arc(314-cw-9,17,3,0,7);g.fillStyle=dotCol();g.fill();g.fillStyle=C.BORDER;g.fillRect(0,34,320,1);
+ if(s.lim){bar(8,39,'5H',s.lim[0]);bar(118,39,'SEM',s.lim[1]);txt('plano: 3 dias',312,40,C.MUTED,F.f0,'right')}else txt('limites de uso: aguardando dados',8,40,C.IDLE,F.f0)}
+function bar(x,y,l,p){g.font=F.f0;txt(l,x,y+1,C.MUTED,F.f0);const bx=x+g.measureText(l).width+4;rr(bx,y+1,56,7,3,C.PANEL2);const col=p>=85?C.DANGER:p>=60?C.NEED:C.WORK;rr(bx,y+1,56*p/100,7,3,col);txt(p+'%',bx+60,y+1,C.TEXT,F.f0)}
+function footer(){g.fillStyle=C.PANEL;g.fillRect(0,220,320,20);g.fillStyle=C.BORDER;g.fillRect(0,220,320,1);
+ [3,5,7,9].forEach((h,i)=>{g.fillStyle=i<3?C.FIN:C.BORDER;g.fillRect(8+i*4,234-h,3,h)});
+ g.beginPath();g.arc(32,230,3,0,7);g.fillStyle=dotCol();g.fill();txt(S[scen].hub?'Hub ok':'sem Hub',40,226,C.MUTED,F.f0);txt('CPU 23%  RAM 61%  >',312,226,C.MUTED,F.f0,'right')}
+function pill(x,y,w,h,bg,fg,s,f=F.f0){rr(x,y,w,h,h/2,bg);txt(s,x+w/2,y+h/2+1,fg,f,'center','middle')}
+function button(x,y,w,h,col,fg,l,outline){if(outline){rr(x+1,y+1,w-2,h-2,10,C.BG,col,2)}else rr(x,y,w,h,10,col);txt(l,x+w/2,y+h/2+1,outline?col:fg,F.b9,'center','middle')}
+function card(s,y,blink){const [lb,col]=STL[s.st],al=s.st=='needyou';rr(6,y,308,46,10,C.PANEL,al?(blink?C.NEED:mix(C.PANEL,C.NEED,.35)):null,2);
+ rr(9,y+8,4,30,2,col);const sc=SRC[s.s]||C.MUTED;g.beginPath();g.arc(30,y+23,12,0,7);g.fillStyle=mix(C.PANEL,sc,.27);g.fill();g.strokeStyle=sc;g.lineWidth=1;g.stroke();
+ txt(s.s=='codex'?'X':s.s[0].toUpperCase(),30,y+24,sc,F.b9,'center','middle');g.font=F.f0;const cw=g.measureText(lb).width+14;pill(306-cw,y+7,cw,14,mix(C.PANEL,col,.2),col,lb);
+ txt(fit(s.t,300-cw-52,F.b9),48,y+7,C.TEXT,F.b9);txt(fit(s.s+'/'+s.p+'  '+s.d,256,F.f0),48,y+31,C.MUTED,F.f0)}
+let hits=[];
+function list(now){bgd(now);header();const s=S[scen];hits=[];
+ if(!s.sess.length){avatar(128,66,64,INK[mood()]);txt(s.hub?'Tudo tranquilo':'Sem conexao com o Hub',160,142,C.TEXT,F.b9,'center');txt(s.hub?'nenhuma sessao de IA rodando agora':'confira se o Hub esta rodando no PC',160,164,C.MUTED,F.f0,'center')}
+ else{const pages=Math.ceil(s.sess.length/3);page%=pages;const blink=Math.floor(now/500)%2==0;
+  for(let k=0;k<3;k++){const i=page*3+k;if(i>=s.sess.length)break;const y=54+k*50;card(s.sess[i],y,blink);hits.push([y,i])}
+  if(pages>1){const p='<   '+(page+1)+' / '+pages+'   >';g.font=F.f0;const w=g.measureText(p).width+20;pill(160-w/2,205,w,13,C.PANEL2,C.TEXT,p)}}
+ footer()}
+function wrap(s,w,f,n){g.font=f;const out=[];let line='';for(const word of s.split(' ')){const c2=line?line+' '+word:word;if(g.measureText(c2).width<=w)line=c2;else{out.push(line);line=word;if(out.length>=n)break}}if(out.length<n&&line)out.push(line);return out.slice(0,n)}
+function detail(now){bgd(now);header();const s=S[scen].sess[sel]||S[scen].sess[0];if(!s){screen='list';return}const [lb,col]=STL[s.st];
+ rr(6,52,308,128,12,C.PANEL);rr(6,52,6,128,3,col);txt(fit(s.t,288,F.b12),18,60,C.TEXT,F.b12);g.font=F.f0;const cw=g.measureText(lb).width+14;pill(18,86,cw,14,mix(C.PANEL,col,.24),col,lb);
+ txt(s.s+' / '+s.p,26+cw,89,SRC[s.s]||C.MUTED,F.f0);txt('FAZENDO AGORA',18,108,C.ACC,F.f0);wrap(s.d,284,F.f2,3).forEach((l,i)=>txt(l,18,120+i*16,C.TEXT,F.f2));
+ txt('tokens 12000 in / 3400 out   custo $0.42',18,168,C.MUTED,F.f0);
+ const hasAp=S[scen].ap&&s.st=='needyou',can=hasAp&&actions;button(8,184,can?92:304,32,C.MUTED,C.TEXT,'Voltar',true);
+ if(can){button(108,184,96,32,C.DANGER,C.BG,'Negar');button(212,184,100,32,C.WORK,C.BG,'Aprovar 1x')}else if(hasAp)txt('aprovacao pendente: responda no computador',18,172,C.NEED,F.f0)}
+function approval(now){const s=S[scen];if(!s.ap){scen='precisa'}const ap=S.precisa.ap,blink=Math.floor(now/600)%2==0,amber=blink?C.NEED:mix(C.NEED,'#c87814',.55);
+ bgd(now);g.fillStyle=amber;g.fillRect(0,0,320,64);g.fillStyle=mix(amber,C.BG,.47);g.fillRect(0,64,320,3);avatar(10,8,48,'#ffecc8','#28140a');
+ txt('Precisa de voce',68,12,'#1e1008',F.b12);txt('claude: Deploy tech-woman',69,40,'#1e1008',F.f0);
+ rr(8,76,304,100,12,C.PANEL);txt('COMANDO',18,84,C.NEED,F.f0);
+ g.font=F.mono;let cmd=ap.cmd,lines=[];while(cmd&&lines.length<3){let n=cmd.length;while(g.measureText(cmd.slice(0,n)).width>286)n--;lines.push(cmd.slice(0,n));cmd=cmd.slice(n)}
+ lines.forEach((l,i)=>txt(l,18,98+i*18,C.TEXT,F.mono));txt(ap.desc,18,160,C.MUTED,F.f0);
+ if(actions){button(8,188,96,40,C.DANGER,C.BG,'Negar');button(112,188,88,40,C.MUTED,C.TEXT,'Depois',true);button(208,188,104,40,C.WORK,C.BG,'Aprovar 1x')}
+ else{txt('Modo so leitura: responda no computador ou no Telegram.',160,180,C.MUTED,F.f0,'center');button(8,194,304,34,C.NEED,C.BG,'Entendi')}}
+let mstate={m:null,k:0,next:0,glance:0,gUntil:0,gm:'look_left'};
+function face(now){let m=mood();if(m=='neutral'){if(now<mstate.gUntil)m=mstate.gm;else if(now-mstate.glance>8000){mstate.glance=now;mstate.gUntil=now+3500;mstate.gm=mstate.gm=='look_left'?'look_right':'look_left';m=mstate.gm}}
+ if(m!==mstate.m){mstate.m=m;mstate.k=0;mstate.next=now}const fr=imgs[m];if(now>=mstate.next){mstate.k=(mstate.k+1)%fr.length;mstate.next=now+Math.max(40,fr[mstate.k].d)}
+ const ink=INK[m],im=tinted(m,mstate.k,ink);g.fillStyle=ink;g.fillRect(0,0,320,240);if(im)g.drawImage(im,0,0);
+ g.fillStyle=ink;g.fillRect(4,4,74,26);txt(clock(),8,9,LINE,F.b12);g.beginPath();g.arc(308,13,4,0,7);g.fillStyle=dotCol();g.fill();g.strokeStyle=LINE;g.lineWidth=1;g.stroke();
+ const s=S[scen];if(s.lim)txt('5h '+s.lim[0]+'%',300,9,LINE,F.f0,'right');
+ const msg={listening:'Precisa de voce: Deploy tech-woman',sad:'Sem conexao com o Hub',happy:'Terminou: Relatório semanal',thinking:'Trabalhando em '+s.sess.filter(x=>x.st=='working').length+' sessoes',sleeping:'Zzz... toque para acordar'}[mood()]||'Tudo tranquilo - toque para ver';
+ rr(10,206,300,28,14,C.PANEL,LINE);g.beginPath();g.arc(26,220,4,0,7);g.fillStyle=ink;g.fill();txt(fit(msg,260,F.s9),38,213,C.TEXT,F.s9)}
+function settings(now){bgd(now);header();txt('Configuracoes',10,42,C.TEXT,F.b9);rr(6,62,308,98,12,C.PANEL);
+ const rows=[['Wi-Fi','MinhaRede  (78%)',C.TEXT],['Hub',S[scen].hub?'192.168.0.40:8790':'192.168.0.40:8790',C.TEXT],['Estado',S[scen].hub?'conectado':'sem conexao',S[scen].hub?C.WORK:C.DANGER],['Aprovar',actions?'pelo toque (ligado no Hub)':'so leitura',actions?C.NEED:C.WORK],['Aparelho','192.168.0.57   v0.2.0',C.TEXT]];
+ rows.forEach(([a,b,col],i)=>{txt(a,18,72+i*18,C.MUTED,F.f0);txt(b,96,72+i*18,col,F.f0)});button(8,168,148,34,C.PANEL2,C.TEXT,'Trocar rede');button(164,168,148,34,C.DANGER,C.BG,'Esquecer Wi-Fi',true);txt('< voltar',10,208,C.MUTED,F.f0)}
+function stats(now){bgd(now);txt('COMPUTADOR',12,10,C.TEXT,F.b12);pill(232,10,78,18,mix(C.PANEL,C.WORK,.25),C.WORK,'TRANQUILO');
+ [['CPU',23,C.WORK],['RAM',61,C.NEED],['GPU',8,C.FIN]].forEach(([l,p,col],i)=>{const x=20+i*100,cx=x+40,cy=86;g.lineWidth=8;g.strokeStyle=C.PANEL2;g.beginPath();g.arc(cx,cy,30,.75*Math.PI,2.25*Math.PI);g.stroke();g.strokeStyle=col;g.beginPath();g.arc(cx,cy,30,.75*Math.PI,(.75+1.5*p/100)*Math.PI);g.stroke();txt(p+'%',cx,cy,C.TEXT,F.b9,'center','middle');txt(l,cx,cy+26,C.MUTED,F.f0,'center')});
+ rr(8,140,304,70,12,C.PANEL);txt('processo top   node.exe  14%',20,150,C.TEXT,F.f2);txt('rede   ↓ 1.2 MB/s   ↑ 0.3 MB/s',20,170,C.TEXT,F.f2);txt('bateria   87%  (3h10)',20,190,C.TEXT,F.f2);txt('toque para voltar',160,222,C.MUTED,F.f0,'center')}
+const SCR=[['list','Lista'],['detail','Detalhe'],['approval','Aprovação'],['face','Rosto Nous‑Girl'],['stats','Computador'],['settings','Configurações']];
+const CEN=[['trabalhando','Trabalhando'],['precisa','Precisa de você'],['terminou','Terminou'],['ocioso','Ocioso'],['dormindo','Dormindo'],['semhub','Sem Hub']];
+function mk(id,arr,get,set){const el=document.getElementById(id);el.innerHTML='';arr.forEach(([k,l])=>{const b=document.createElement('button');b.textContent=l;b.className=get()==k?'on':'';b.onclick=()=>{set(k);ui()};el.appendChild(b)})}
+function ui(){mk('scr',SCR,()=>screen,k=>{screen=k;if(k=='approval')scen='precisa'});mk('cen',CEN,()=>scen,k=>{scen=k;page=0;sel=0;if(screen=='approval'&&k!='precisa')screen='list'});document.getElementById('act').textContent='Aprovar pelo toque: '+(actions?'ligado':'desligado');document.getElementById('act').className=actions?'on':''}
+document.getElementById('act').onclick=()=>{actions=!actions;ui()};
+c.onclick=e=>{const r=c.getBoundingClientRect(),x=(e.clientX-r.left)*320/r.width,y=(e.clientY-r.top)*240/r.height;
+ if(screen=='face'){screen='list'}else if(screen=='list'){if(y>=220)screen='stats';else if(y>=202)page++;else{const h=hits.find(([yy])=>y>=yy&&y<yy+46);if(h){sel=h[1];screen='detail'}}}
+ else if(screen=='detail'){if(y>=184)screen='list'}else if(screen=='approval'){if(y>=188)screen='list'}else if(screen=='stats')screen='list';else if(screen=='settings'&&y>=200)screen='list';ui()};
+function loop(now){({list,detail,approval,face,settings,stats})[screen](now);requestAnimationFrame(loop)}
+ui();requestAnimationFrame(loop);
+</script></body></html>

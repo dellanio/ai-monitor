@@ -1,0 +1,59 @@
+# hub-stack-chan (AI Monitor) — config v0.2
+# Copie para config.yaml (fora do git) e ajuste caminhos/portas para a sua máquina.
+
+device:
+  host: "0.0.0.0"      # o Stack-chan conecta por Wi-Fi; 0.0.0.0 escuta na LAN
+  port: 8790           # hub-stack-chan; 8787 é do headroom_proxy do Hermes (não usar)
+  mdns: true           # anuncia hub-stack-chan._dellmonitor-hub._tcp.local.
+  # Pareamento: o aparelho só conecta com este token (digite-o no portal
+  # de Wi-Fi do aparelho). Sem "token", o Hub gera um em
+  # ~/.dellmonitor/device_token e mostra no console na 1a execução.
+  # Aceita "file:/caminho" ou a variável DELLMONITOR_DEVICE_TOKEN.
+  # token: "file:~/.dellmonitor/device_token"
+  allow_actions: false  # true = aprovar/negar pelo toque (Claude/Hermes)
+  allow_messages: false # true = o aparelho pode enviar texto ao Hermes
+
+hermes:
+  enabled: true
+  ws_url: "ws://127.0.0.1:9119/api/ws"   # dashboard local; sem auth em loopback
+  rest_base: "http://127.0.0.1:9119"
+  token: "file:~/.dellmonitor/hermes_token"   # nunca o valor em texto puro aqui
+                       # sessão em /api/* e /api/ws (ver README). Suba o
+                       # dashboard com HERMES_DASHBOARD_SESSION_TOKEN=<token>
+                       # e repita o valor aqui (ou "file:/caminho/do/token").
+  reconnect_delay_s: 5
+  ping_interval_s: 15
+  cron_refresh_s: 300
+
+claude:
+  enabled: true
+  projects_root: "~/.claude/projects"
+  poll_interval_s: 5
+  hook_host: "127.0.0.1"
+  hook_port: 8767
+  recent_hours: 6      # só sessões mexidas nas últimas 6 h
+  stale_after_s: 600   # parada há 10 min sem fim de turno -> "parada"
+
+timon:
+  enabled: false       # missões dos agentes do Timon (somente leitura)
+  api_url: "http://127.0.0.1:3010"       # daemon local; o Hub recusa host remoto
+  token: "file:~/.timon/daemon-token"    # credencial de operador: só GET, só loopback
+  poll_interval_s: 5
+  finished_keep_s: 600 # "terminou" fica 10 min na lista
+
+approval:
+  timeout_s: 120       # sem toque no prazo -> o terminal decide (prompt normal)
+
+host:
+  enabled: true        # CPU/RAM/GPU/rede/bateria do PC para a tela COMPUTADOR
+  interval_s: 2.0      # amostragem em segundos
+
+voice:
+  enabled: false       # "Hey Hermes" + canal de voz local (ver README)
+  port: 8788           # WebSocket /voice do aparelho (mesmo token do monitor)
+  canal_url: "ws://127.0.0.1:4850/voz/ws"   # canal de voz local (protocolo voz-hermes)
+  engine: "codex"      # voz em tempo real da assinatura ChatGPT (nunca API paga)
+  wake_model: "~/models/vosk-model-small-en-us-0.15"   # baixe em alphacephei.com/vosk/models   # detector local
+  wake_phrases: ["hey hermes", "hi hermes"]
+  follow_up_s: 12      # sem você falar 12 s depois da resposta -> volta a esperar "Hey Hermes"
+  keep_s: 300          # conversa no canal fica aberta 5 min (resposta rápida na próxima vez)
