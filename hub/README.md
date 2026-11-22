@@ -259,3 +259,22 @@ m4a...). Um arquivo seu tem prioridade sobre o padrão:
 Trocar um som = trocar o arquivo (vale em até 15 s, sem reiniciar nada nem regravar
 o robô). Sons longos são cortados em `voice.sound_max_s` (6 s). Sem o arquivo, com a
 voz desconectada ou no meio de uma conversa, o robô usa os toques embutidos.
+
+
+## Subir com o Windows
+
+`windows/hub-stack-chan.ps1` é um supervisor: confere a cada 15 s se o Hub (porta 8790)
+e, opcionalmente, o canal de voz (`-CanalDir <pasta com voz.cmd>`, porta 4850) estão no
+ar e religa o que caiu. Logs em `%LOCALAPPDATA%\hub-stack-chan\`.
+
+Para iniciar no login sem esperar a fila lenta da pasta Inicializar, registre como
+tarefa agendada (PowerShell, sem precisar de administrador):
+
+```powershell
+$ps1 = (Resolve-Path .\windows\hub-stack-chan.ps1).Path
+$a = New-ScheduledTaskAction -Execute powershell.exe -Argument "-NoProfile -WindowStyle Hidden -ExecutionPolicy Bypass -File `"$ps1`""
+$t = New-ScheduledTaskTrigger -AtLogOn -User $env:USERNAME; $t.Delay = 'PT20S'
+$p = New-ScheduledTaskPrincipal -UserId $env:USERNAME -LogonType Interactive -RunLevel Limited
+$s = New-ScheduledTaskSettingsSet -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit 0
+Register-ScheduledTask -TaskName hub-stack-chan -Action $a -Trigger $t -Principal $p -Settings $s
+```

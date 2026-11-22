@@ -1,154 +1,216 @@
-# AI Monitor — firmware v0.1
+<div align="center">
 
-Monitor de sessões de IA para o M5Stack CoreS3 (Stack-chan), equivalente
-funcional de código próprio inspirado no conceito do Miblo Desk: mostra as
-sessões de IA rodando no computador, avisa quando uma precisa de você e
-mostra os limites de uso — com um pet original ("Bolt", um robozinho) que
-passeia pela tela quando nada precisa de atenção.
+# 🤖 AI Monitor
 
-**Nome do projeto: AI Monitor.** Não usa a marca "Miblo" em lugar nenhum
-da interface: firmware fechado, arte dos pets e marca do produto original
-não foram copiados.
+**A desk robot that watches your AI agents: live sessions, "needs you" alerts and a voice you can talk to — on an M5Stack CoreS3 / StackChan**
 
-## O que a v0.1 faz
+[![Device](https://img.shields.io/badge/Device-M5Stack%20CoreS3%20%7C%20StackChan-E4002B.svg?style=flat&logo=espressif)](https://docs.m5stack.com/en/core/CoreS3)
+[![Firmware](https://img.shields.io/badge/Firmware-Arduino%20%2B%20PlatformIO-F5822A.svg?style=flat&logo=platformio)](https://platformio.org)
+[![Hub](https://img.shields.io/badge/Hub-Python%203.12-3776AB.svg?style=flat&logo=python&logoColor=white)](hub/README.md)
+[![Sources](https://img.shields.io/badge/Sources-Claude%20Code%20%7C%20Hermes%20%7C%20Timon-8A2BE2.svg?style=flat)](#-supported-sources)
+[![Voice](https://img.shields.io/badge/Voice-%22Hey%20Hermes%22%20(local)-00A67E.svg?style=flat)](#%EF%B8%8F-voice)
+[![Mode](https://img.shields.io/badge/Default-Read--only-blue.svg?style=flat)](#-security--privacy-model)
 
-- **Tela 320×240 paisagem**: lista de até 20 sessões com cor por status
-  (verde trabalhando, âmbar piscando "precisa de você", azul "terminou").
-- **Toque**: tocar numa sessão abre o detalhe (fonte, perfil, o que está
-  fazendo agora, tokens/custo).
-- **Aprovação**: tela âmbar em tela cheia com comando + descrição e botões
-  Aprovar 1x / Na sessão / Negar. **O botão só tem efeito com o Hub
-  conectado** — sem Hub, mostra "sem Hub: acao nao enviada".
-- **Alertas**: beep no alto-falante quando chega um pedido de permissão;
-  aceno com os servos da cabeça (desativado por padrão — ver abaixo).
-- **Wi-Fi / configuração**: na primeira inicialização o aparelho abre o
-  AP `AIMonitor-Setup` e mostra na tela os 3 passos numerados, o nome
-  do AP em destaque, a URL `192.168.4.1` e um **QR code** do portal, com
-  uma faixa de status ao vivo ("Aguardando conexao...", "Conectando a
-  ...", "Conectado! IP ..." ou o erro exato — "Senha errada", "Rede nao
-  encontrada"). O portal lista as **redes encontradas por scan** com
-  barras de sinal (toque para escolher), campo de senha com
-  mostrar/ocultar, IP do Hub e botão "Salvar e conectar"; depois do envio
-  ele **testa a conexão na hora** e mostra o resultado (IP ou erro com
-  link para tentar de novo). Depois conecta e anuncia
-  `aimonitor.local` via mDNS. Na conexão, a tela mostra o progresso
-  (barra + nome da rede) e o erro específico se falhar.
-- **Tela CONFIGURACOES**: pressão longa (2 s) no cabeçalho abre a tela
-  de configurações — Wi-Fi atual com força do sinal, Hub (IP:porta e
-  estado), IP do aparelho e os botões "Trocar rede" (abre o portal),
-  "Esquecer Wi-Fi" e "Voltar". A pressão longa **não apaga mais o Wi-Fi
-  direto**; o "esquecer" mora dentro de Configurações.
-- **Rodapé**: Wi-Fi, estado do Hub e `CPU 34% MEM 61%` do PC (ou
-  `CPU --% MEM --%` sem dados do Hub). O IP do aparelho saiu do rodapé
-  e agora aparece na tela COMPUTADOR.
-- **Tela COMPUTADOR**: toque no rodapé da lista abre a tela de
-  estatísticas do PC, em tela cheia: cena de mesa estilizada (parede
-  roxo-azulada com estrelas, quadro, janela com sol e nuvens, luminária
-  acesa, laptop com código, aparelhinho amarelo e planta) com o título e o
-  selo de estado (TRANQUILO / PESADO / BAIXA) dentro da cena, e embaixo um
-  cartão marrom com CPU% e RAM% grandes com barras, rede (download/upload),
-  GPU%, processo que mais consome CPU e bateria (quando o PC tem uma). O IP
-  do aparelho fica na última linha do cartão. Qualquer toque volta à lista.
-- **Modo mock**: sem Hub configurado, simula 3 sessões falsas que ciclam
-  entre estados (alerta a cada ~45 s) para demonstrar a UI sem nada no PC,
-  e simula as estatísticas do computador (incluindo estados PESADO e
-  BAIXA de vez em quando).
-- **Pet**: após 60 s sem toque, "Bolt" (robozinho original em pixel art
-  32x32, desenhado em `src/pet.cpp`) passeia pela tela com uma plaquinha
-  mostrando hora + limites + última tarefa terminada. Qualquer alerta tira
-  o pet da tela na hora.
-- **Relógio**: via NTP (America/Sao_Paulo).
+*Stop switching windows to check whether an agent finished or is stuck waiting for you. The robot on your desk tells you — at a glance, with a sound, or out loud.*
 
-## Hardware
+[Português (README.pt-BR.md)](README.pt-BR.md)
 
-- M5Stack CoreS3 (ESP32-S3, display IPS touch 320×240 ILI9342C,
-  alto-falante, microfone, 2 servos, USB-C).
-- **Servos**: os pinos estão em `src/config.h` como `SERVO_YAW_PIN` /
-  `SERVO_PITCH_PIN` com o comentário `CONFIRMAR pinagem do Stack-chan
-  K151` e vêm **desativados** (`-1`, `SERVO_ENABLED 0`). Não foi afirmada
-  nenhuma pinagem sem conferir a documentação oficial do M5Stack. Para
-  ativar o aceno, coloque os GPIOs reais e ligue `SERVO_ENABLED`.
+</div>
 
-## Como compilar e gravar
+---
 
-Pré-requisitos: [PlatformIO](https://platformio.org/) (`pip install
-platformio`) e o cabo USB-C do Stack-chan.
+## 📸 Screens
 
+<div align="center">
+  <table>
+    <tr>
+      <td align="center"><b>Live session list</b></td>
+      <td align="center"><b>"Needs you" highlighted</b></td>
+      <td align="center"><b>Idle face (Nous-Girl tribute)</b></td>
+    </tr>
+    <tr>
+      <td align="center"><img src="docs/img/lista.png" alt="Session list" width="300" /></td>
+      <td align="center"><img src="docs/img/precisa-de-voce.png" alt="Needs you" width="300" /></td>
+      <td align="center"><img src="docs/img/rosto.png" alt="Idle face" width="300" /></td>
+    </tr>
+    <tr>
+      <td align="center"><b>Computer stats</b></td>
+      <td align="center"><b>Permission request (read-only)</b></td>
+      <td align="center"><b>Session detail</b></td>
+    </tr>
+    <tr>
+      <td align="center"><img src="docs/img/computador.png" alt="Computer stats" width="300" /></td>
+      <td align="center"><img src="docs/img/aprovacao.png" alt="Permission request" width="300" /></td>
+      <td align="center"><img src="docs/img/detalhe.png" alt="Session detail" width="300" /></td>
+    </tr>
+  </table>
+  <sub>Rendered by the firmware simulator in <code>docs/preview.html</code> (sample data).</sub>
+</div>
+
+---
+
+## ⚡ The Problem
+
+Running several AI agents at once (Claude Code in a terminal, Hermes on Telegram and desktop, Timon on a board) means:
+- An agent stops to **ask a question or a permission** and waits for twenty minutes because you didn't see it;
+- You keep switching windows just to check **who finished** and who is still working;
+- Usage limits and the machine's CPU/RAM are hidden in yet another tab.
+
+---
+
+## 💡 The Solution: AI Monitor
+
+A small **Hub** runs on your computer, reads the agents locally and pushes a compact picture to the robot over your Wi-Fi. The robot answers three questions at a glance:
+
+1. **What is running?** Up to 20 sessions, color-coded: working · **needs you** · finished.
+2. **Does anyone need me?** Amber card and a spoken *"Preciso de você"* — repeated every minute (up to 5×) until you answer.
+3. **Who just finished?** A spoken *"Terminei!"* and the card turns blue.
+
+And when you want to ask something, just say **"Hey Hermes"**.
+
+---
+
+## 🚀 Key Features
+
+- 🧭 **One screen for every agent:** Claude Code, Hermes (any origin: Telegram, desktop, CLI) and Timon in the same list, with the current tool or step of each session.
+- 🔔 **Real attention signals:** Claude questions (`AskUserQuestion`), plan approvals (`ExitPlanMode`), permission prompts and Hermes `clarify` all become **needs you**.
+- 🗣️ **Custom sounds without reflashing:** alerts are audio files played by the Hub. Ships with Portuguese voice clips and chimes; drop your own `finished.mp3` and it is used within 15 s. Built-in beeps remain as fallback.
+- 🎙️ **Local voice assistant:** "Hey Hermes" is detected on the computer (Vosk, offline) and the conversation goes to a voice channel running on the same computer.
+- 💻 **Computer screen:** CPU, RAM, GPU, network, top process and battery of the PC.
+- 🛡️ **Read-only by default:** the robot shows approvals but cannot approve anything unless you explicitly enable it.
+- 🔁 **Starts with Windows:** a supervisor brings the Hub (and the voice channel) back up at logon and whenever it crashes.
+- 📶 **Friendly setup:** first boot opens an `AIMonitor-Setup` access point with QR code, network scan and live connection test.
+
+---
+
+## 🏗️ Architecture & Data Flow
+
+```mermaid
+flowchart LR
+    subgraph PC ["Your computer"]
+        Claude["Claude Code<br/>(session files + hooks)"]
+        Hermes["Hermes dashboard<br/>(REST + WebSocket)"]
+        Timon["Timon daemon<br/>(loopback, GET only)"]
+        Stats["CPU / RAM / GPU"]
+        subgraph Hub ["hub-stack-chan (Python)"]
+            Sources["Source adapters"]
+            State["Session state"]
+            Voice["Voice: Vosk 'Hey Hermes'"]
+            Sounds["Alert sounds<br/>hub/sounds + ~/.dellmonitor/sounds"]
+        end
+        Canal["Local voice channel<br/>(voz-hermes)"]
+    end
+
+    subgraph Robot ["M5Stack CoreS3 / StackChan"]
+        UI["Screens + face"]
+        Spk["Speaker / mic"]
+    end
+
+    Claude & Hermes & Timon & Stats --> Sources --> State
+    State -->|"WS :8790 (token)"| UI
+    Spk <-->|"WS :8788 /voice (token)"| Voice
+    Voice <--> Canal
+    Sounds -->|"PCM 24 kHz"| Spk
+```
+
+- **Firmware:** C++ (Arduino on ESP32-S3) with M5Unified and PlatformIO, `default_16MB` partitions.
+- **Hub:** Python 3.12, `websockets`, `aiohttp`, `psutil`, `vosk`, `av` (any audio format for alerts).
+- **Protocol:** JSON over WebSocket, documented in [`firmware/PROTOCOL.md`](firmware/PROTOCOL.md).
+
+---
+
+## 📦 Getting Started
+
+### 1. Flash the robot
 ```bash
 cd firmware
-pio run                 # compila
-pio run -t upload       # grava no CoreS3
-pio device monitor -b 115200   # log serial
+pio run -t upload --upload-port COM5   # app + bootloader + partitions over USB
+```
+> ⚠️ This **replaces** the firmware currently on the robot. Back up the full flash first:
+> `esptool --port COM5 read-flash 0 0x1000000 backup.bin`
+
+### 2. Run the Hub on your computer
+```bash
+cd hub
+python -m venv .venv && . .venv/Scripts/activate   # Linux/macOS: . .venv/bin/activate
+pip install -r requirements.txt
+cp config.example.yaml config.yaml                 # your settings stay out of git
+python -m hub --config config.yaml
+```
+On first run the Hub prints a **pairing token**.
+
+### 3. Connect the robot
+The robot opens the `AIMonitor-Setup` network. Join it, open `http://192.168.4.1`, pick your Wi-Fi and enter the Hub IP (port **8790**) and the token. Without a Hub it runs a demo mode.
+
+### 4. (Windows) Start with the system
+`hub/windows/hub-stack-chan.ps1` keeps the Hub (and optionally the voice channel) running. Register it as a scheduled task at logon — see [`hub/README.md`](hub/README.md).
+
+---
+
+## 🔌 Supported Sources
+
+| Source | How it is read | Working | Needs you | Finished |
+|---|---|:---:|:---:|:---:|
+| **Claude Code** | session files in `~/.claude/projects` + optional hooks (`hub/hooks/claude-hook.py`) | ✅ | ✅ questions, plans, permissions | ✅ |
+| **Hermes** | dashboard REST + WebSocket with a fixed session token (`file:` path) | ✅ | ✅ `clarify` / approvals | ✅ any origin |
+| **Timon** | local daemon, loopback only, GET only | ✅ | ✅ | ✅ |
+
+Hermes voice, CLI one-shot, cron and ACP sessions do not play the "finished" sound, to avoid noise.
+
+---
+
+## 🎙️ Voice
+
+| You | Robot |
+|---|---|
+| "Hey Hermes" | face switches to *listening* |
+| ask anything | answers out loud through the local voice channel |
+| tap while it speaks | stops talking |
+
+Wake-word detection runs offline on the computer (Vosk `vosk-model-small-en-us`). The first conversation takes ~8–13 s to open; follow-ups within 5 min are immediate.
+
+### Alert sounds
+
+| File | Alert | Default |
+|---|---|---|
+| `needyou.*` | needs you | voice: *"Preciso de você."* |
+| `finished.*` | finished | voice: *"Terminei!"* |
+| `new.*` | new session | soft chime |
+
+Defaults live in `hub/sounds/` (alternatives in `hub/sounds/opcoes/`, generator in `hub/sounds/gerar_sons.py`). Put a file with the same name in `~/.dellmonitor/sounds/` to override it — wav, mp3, ogg, m4a… Clips longer than 6 s are trimmed.
+
+---
+
+## 🔒 Security & Privacy Model
+
+- **Read-only by default:** `allow_actions: false` — the robot displays approvals; you answer them on the computer.
+- **Paired by token:** both device sockets (`:8790` monitor, `:8788` voice) reject clients without the Hub token.
+- **Secrets never in YAML:** tokens are referenced as `file:~/.dellmonitor/...`; your `config.yaml` is git-ignored.
+- **Local first:** the Hub talks to agents on loopback; the robot never talks to Claude, Hermes or any cloud API directly. Keep the Hub inside your LAN.
+- **Hooks never block:** the Claude hook only reports status, never decides, and exits silently in ~2 s if the Hub is down.
+
+---
+
+## 🛠️ Building & Testing
+
+```bash
+# Hub test suite
+cd hub
+pip install -r requirements-dev.txt
+python -m pytest -q
+
+# Firmware build
+cd firmware
+pio run
 ```
 
-Na primeira gravação, o aparelho abre o AP `AIMonitor-Setup` e mostra
-na tela os passos + QR code: conecte o celular/PC nele, escaneie o QR
-ou abra `http://192.168.4.1`, toque na sua rede na lista, digite a senha
-e o IP do Hub (deixe o Hub vazio para o modo de demonstração) e salve —
-ele testa a conexão na hora, mostra o resultado e reinicia conectado.
+`docs/preview.html` is a browser simulator of the firmware screens (regenerate with `firmware/tools/gen_preview.py`). Firmware details: [`firmware/README.md`](firmware/README.md) · Hub details: [`hub/README.md`](hub/README.md).
 
-> **Migração de nome:** o projeto se chamava ChanMonitor; o namespace de
-> Preferences mudou para `dellmonitor`, então aparelhos que já tinham
-> Wi-Fi salvo na versão ChanMonitor precisam configurar o Wi-Fi de novo
-> uma vez (o portal abre sozinho).
+---
 
-## Como apontar o Hub
+## 📄 License & Credits
 
-O Hub (programa no computador, em `../hub/`) escuta WebSocket na porta
-8790 por padrão. No portal, informe o IP do PC e a porta. O protocolo
-JSON completo está em `PROTOCOL.md`, alinhado com o mapa da API do
-Hermes em `../hermes-api-map.md` (status `waiting` → `needs-you`,
-aprovação como request servidor→cliente, uso via `session.usage` /
-`usage.bars`). O Hub também envia as estatísticas do PC (frame `host`):
-CPU/RAM sempre; GPU (só NVIDIA, via `nvidia-smi`), processo top, rede
-e bateria são best-effort e chegam `null` quando o PC não tem o recurso.
-
-## Voltar ao Nous-Girl (firmware anterior)
-
-Este firmware substitui o Nous-Girl/XiaoZhi. Para restaurar, siga
-`%LOCALAPPDATA%/StackChan-Recovery/RESTAURAR.md`: grava o backup
-completo da flash (16 MB, SHA-256 conferido) com `esptool`, depois de
-conferir o MAC do aparelho. M5Burner/UIFlow2 **não** devolve o Nous-Girl.
-
-## Arquivos
-
-```
-platformio.ini        PlatformIO: board m5stack-cores3, Arduino, libs
-PROTOCOL.md           protocolo JSON Hub <-> dispositivo
-README.md             este arquivo
-src/
-  main.cpp            boot, máquina de estados, loop, beep/aceno
-  gfx.h/.cpp          quadro em memória (PSRAM), sem cintilação
-  face.h/.cpp         rosto da Nous-Girl (GIFs embutidos) e avatar tingido
-  nous_avatar.h       avatar 36x36 gerado por tools/gen_avatar.py
-  config.h            constantes (nome, mDNS, servos, timeouts, cores)
-  model.h/.cpp        sessões, status, aprovação, limites, estatísticas do PC
-  wifi_setup.h/.cpp   portal captivo com scan de redes, QR code,
-                      status ao vivo, conexão, mDNS
-  hub_client.h/.cpp   WebSocket do Hub + modo mock (sessões e estatísticas)
-  ui.h/.cpp           telas (lista, detalhe, aprovação, pet, COMPUTADOR,
-                      CONFIGURACOES, rodapé)
-  pet.h/.cpp          sprite original "Bolt" + passeio + plaquinha
-  servo_head.h/.cpp   aceno da cabeça (desativado por padrão)
-```
-
-## Limites honestos da v0.1
-
-- **Sem Hub, só o modo mock funciona.** Sem ele, as sessões e as
-  estatísticas do PC são simuladas (ver `PROTOCOL.md`).
-- **GPU só NVIDIA**: a tela COMPUTADOR mostra `GPU --` em PCs sem GPU
-  NVIDIA ou sem `nvidia-smi`; bateria só aparece em notebooks.
-- **Aprovar por toque só tem efeito com o Hub conectado.** O botão já está
-  desenhado, mas sem Hub a ação é só local.
-- **Sem OTA**: atualização é por cabo USB (`pio run -t upload`). OTA por
-  Wi-Fi fica para uma versão futura.
-- **Sem tela de cron**: os jobs chegam no protocolo, mas ainda não há tela
-  própria (a lista mostra só sessões).
-- **Só as 3 primeiras sessões aparecem na lista**; havendo mais, o rodapé
-  avisa quantas faltam (rolagem fica para depois).
-- **Servos desativados** até confirmar a pinagem do K151 (ver acima).
-- **Nada foi testado no hardware real**: o build é verificado por
-  compilação; o comportamento na tela, o toque e o Wi-Fi precisam de teste
-  com o Stack-chan em mãos.
-- **Segurança**: o aparelho nunca recebe senhas de serviços — só o estado
-  das sessões via Hub na rede local. Não exponha o Hub fora da sua LAN.
+- **License:** not defined yet — all rights reserved until a license file is added.
+- The idle face is a **fan-made tribute to Nous Research's Nous-Girl**, not affiliated with Nous Research and not covered by any open license — see [`firmware/assets/nousgirl/TRIBUTE-README.md`](firmware/assets/nousgirl/TRIBUTE-README.md).
+- The default spoken clips were synthesized with a Microsoft Edge neural voice; check its terms before redistributing them. The chimes are original.
+- Concept inspired by desk AI monitors such as Miblo Desk; no code, art or branding was copied.
