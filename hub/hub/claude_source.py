@@ -43,6 +43,13 @@ def _text_of_content(content) -> str:
     return ""
 
 
+# Ferramentas do Claude que param e esperam a sua resposta.
+ASK_TOOLS = {
+    "AskUserQuestion": "pergunta para voce",
+    "ExitPlanMode": "plano para aprovar",
+}
+
+
 def parse_session_file(path: Path) -> dict | None:
     """Read one Claude Code session JSONL. Returns {title, status, detail}."""
     title = ""
@@ -90,6 +97,10 @@ def parse_session_file(path: Path) -> dict | None:
     detail = ""
     if last_kind == "end_turn":
         status = "finished"
+    elif last_kind == "assistant-tool" and last_tool in ASK_TOOLS:
+        # A pergunta fica parada esperando você responder: não há tool_result depois dela.
+        status = "needs-you"
+        detail = ASK_TOOLS[last_tool]
     elif last_kind == "assistant-tool" and last_tool:
         detail = f"tool: {last_tool}"
     elif last_kind == "user":

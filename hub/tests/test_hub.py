@@ -726,3 +726,21 @@ async def test_timon_refuses_remote_url(tmp_path):
         assert hub.source("timon")._task is None
     finally:
         await hub.stop()
+
+
+def test_claude_ask_user_question_is_needs_you(tmp_path):
+    import json as _j
+    from hub.claude_source import parse_session_file
+    f = tmp_path / "s.jsonl"
+    recs = [
+        {"type": "user", "message": {"content": "analise a fabrica"}},
+        {"type": "assistant", "message": {"stop_reason": "tool_use", "content": [
+            {"type": "tool_use", "name": "AskUserQuestion", "input": {}}]}},
+    ]
+    f.write_text("\n".join(_j.dumps(r) for r in recs), encoding="utf-8")
+    r = parse_session_file(f)
+    assert r["status"] == "needs-you" and r["detail"] == "pergunta para voce"
+    # respondida (tool_result chega como "user"): volta a trabalhar
+    recs.append({"type": "user", "message": {"content": [{"type": "tool_result", "content": "ok"}]}})
+    f.write_text("\n".join(_j.dumps(r) for r in recs), encoding="utf-8")
+    assert parse_session_file(f)["status"] == "working"

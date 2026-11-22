@@ -63,6 +63,12 @@ class HermesClient(Source):
         self._session = aiohttp.ClientSession()
         self._disabled = False  # set when the dashboard demands auth we lack
         self._known_sessions: set[str] = set()
+        self._activity_task: asyncio.Task | None = None
+        # sid -> (message_count, last_active, status) do último poll
+        self._activity: dict[str, tuple] = {}
+        self._activity_primed = False
+        self.activity_poll = float(getattr(cfg, "activity_poll_s", 8) or 8)
+        self.finish_skip_sources = set(getattr(cfg, "finish_skip_sources", None) or ("oneshot", "acp", "cron"))
 
     # -- lifecycle -------------------------------------------------------
     async def start(self) -> None:
@@ -70,6 +76,8 @@ class HermesClient(Source):
 
     async def stop(self) -> None:
         self._stop = True
+        if self._activity_task:
+            self._activity_task.cancel()
         if self._run_task:
             self._run_task.cancel()
             try:
@@ -197,6 +205,8 @@ class HermesClient(Source):
                 await self._initial_sync()
                 self._ping_task = asyncio.create_task(self._ping_loop())
                 self._cron_task = asyncio.create_task(self._cron_loop())
+                if self._activity_task is None or self._activity_task.done():
+                    self._activity_task = asyncio.create_task(self._activity_loop())
                 await self._reader_task
             finally:
                 for task in (self._ping_task, self._cron_task):
@@ -245,6 +255,92 @@ class HermesClient(Source):
         while True:
             await asyncio.sleep(self.cron_refresh)
             await self._refresh_cron()
+
+    # -- atividade de todas as sessões (Telegram, desktop, CLI...) -------
+    # O WS do painel só manda eventos das sessões abertas pelo próprio socket;
+    # as demais são acompanhadas pelo REST: quando a última mensagem vira
+    # resposta final do assistente, a sessão "terminou" (plim no robô).
+    async def _activity_loop(self) -> None:
+        while not self._stop:
+            try:
+                await self._poll_activity()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:
+                self.log.debug("activity poll failed: %s", exc)
+            await asyncio.sleep(self.activity_poll)
+
+    @staticmethod
+    def classify_tail(msg: dict | None) -> tuple[str, str]:
+        """Estado da sessão pela última mensagem gravada."""
+        if not msg:
+            return "idle", ""
+        role = msg.get("role")
+        calls = msg.get("tool_calls") or []
+        if role == "assistant" and not calls:
+            return "finished", ""
+        if role == "assistant" and calls:
+            names = []
+            for c in calls if isinstance(calls, list) else []:
+                fn = (c or {}).get("function") or {}
+                names.append(fn.get("name") or (c or {}).get("name") or "")
+            if "clarify" in names:
+                return "needs-you", "pergunta para voce"
+            return "working", f"tool: {names[0]}" if names and names[0] else "trabalhando"
+        return "working", "trabalhando"
+
+    async def _poll_activity(self) -> None:
+        data = await self._rest_get("/api/sessions?limit=20")
+        rows = (data or {}).get("sessions") if isinstance(data, dict) else None
+        if not isinstance(rows, list):
+            return
+        primed = self._activity_primed
+        for row in rows:
+            sid = row.get("id")
+            if not sid:
+                continue
+            key = (row.get("message_count"), row.get("last_active"))
+            prev = self._activity.get(sid)
+            if prev is not None and prev[:2] == key:
+                continue
+            if prev is None and row.get("ended_at") and primed is False:
+                self._activity[sid] = (*key, "idle")
+                continue
+            tail = await self._rest_get(
+                f"/api/sessions/{sid}/messages?limit=1&order=latest&inline_images=false")
+            msgs = (tail or {}).get("messages") if isinstance(tail, dict) else None
+            status, detail = self.classify_tail(msgs[-1] if msgs else None)
+            old = prev[2] if prev else None
+            self._activity[sid] = (*key, status)
+            if row.get("ended_at") and prev is None and status != "finished":
+                continue
+            src = row.get("source") or ""
+            title = (row.get("title") or row.get("preview") or sid).strip().replace("\n", " ")[:80]
+            s = self.hub.state.sessions.get(sid)
+            if s is None:
+                if row.get("ended_at") and not primed:
+                    continue
+                self._known_sessions.add(sid)
+                self.hub.upsert_session(Session(
+                    id=sid, title=title, source="hermes",
+                    profile=row.get("profile_name") or row.get("profile"),
+                    status=status if status != "finished" else "idle", detail=detail,
+                    input_tokens=int(row.get("input_tokens") or 0),
+                    output_tokens=int(row.get("output_tokens") or 0),
+                    cost_usd=row.get("estimated_cost_usd")))
+            else:
+                if status != "finished":
+                    self.hub.state.set_session_status(sid, status, detail)
+            if (status == "finished" and primed and old != "finished" and src not in self.finish_skip_sources
+                    and (s is None or s.status != "finished")):
+                self.hub.state.set_session_status(sid, "finished")
+                await self.hub.push_finished(sid, title)
+                self.log.info("hermes: sessao terminou: %s (%s)", title, src)
+            elif status == "finished" and s is not None and s.status != "finished":
+                self.hub.state.set_session_status(sid, "idle")
+        if self._activity_primed:
+            await self.hub.push_sessions()
+        self._activity_primed = True
 
     # -- sync ------------------------------------------------------------
     async def _initial_sync(self) -> None:
