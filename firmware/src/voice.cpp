@@ -38,6 +38,15 @@ int16_t* pool[3];
 uint8_t poolIdx = 0;
 bool outActive = false, outStarted = false, endReceived = false;
 uint32_t lastBinMs = 0;
+// Sons do Hub (arquivos escolhidos no notebook) para os avisos do monitor.
+// Bit i = o Hub tem o som SOUND_NAMES[i]; soundMode = a fila guarda um aviso, não fala.
+const char* const SOUND_NAMES[] = {"needyou", "finished", "new"};
+constexpr uint8_t N_SOUNDS = 3;
+volatile uint8_t soundAvail = 0;
+volatile int8_t soundReq = -1;     // pedido do loop principal; a tarefa de voz envia
+volatile bool soundWaiting = false; // pediu e o áudio ainda não terminou
+uint32_t soundReqMs = 0;
+bool soundMode = false;
 uint8_t oddByte = 0;
 bool hasOdd = false;
 
@@ -102,10 +111,19 @@ void sendJson(const char* json) {
   if (g_conn) vws.sendTXT(json);
 }
 
+uint32_t soundBytes = 0;
+
 void finishSpeaking(bool notify) {
+  bool wasStarted = outStarted;
   outActive = outStarted = endReceived = false;
   rHead = rTail = 0;
   hasOdd = false;
+  if (soundMode) {  // fim de um aviso: a conversa (se houver) não muda
+    Serial.printf("[voz] aviso: fim (%u bytes, tocou %s)\n", (unsigned)soundBytes, wasStarted ? "sim" : "nao");
+    soundMode = false;
+    soundWaiting = false;
+    return;
+  }
   if (notify) sendJson("{\"type\":\"played\"}");
   if (g_state == VOICE_SPEAKING) g_state = VOICE_LISTENING;  // o Hub manda "idle" ao fim da conversa
 }
@@ -121,18 +139,55 @@ void onEvent(WStype_t type, uint8_t* payload, size_t len) {
       if (g_conn) Serial.println("[voz] desconectado");
       g_conn = false;
       g_state = VOICE_OFF;
+      soundAvail = 0;
+      soundWaiting = false;
       break;
     case WStype_BIN:
       if (!ring) break;
       ringPush(payload, len);
+      if (soundMode) {
+        if (soundBytes == 0) Serial.printf("[voz] aviso: 1o bloco %u bytes\n", (unsigned)len);
+        soundBytes += len;
+      }
       outActive = true;
       lastBinMs = millis();
-      g_state = VOICE_SPEAKING;
+      if (!soundMode) g_state = VOICE_SPEAKING;
       break;
     case WStype_TEXT: {
       JsonDocument doc;
       if (deserializeJson(doc, payload, len)) break;
-      if (strcmp(doc["type"] | "", "voice") != 0) break;
+      const char* mt = doc["type"] | "";
+      if (!strcmp(mt, "sounds")) {
+        uint8_t m = 0;
+        for (JsonVariant n : doc["names"].as<JsonArray>())
+          for (uint8_t i = 0; i < N_SOUNDS; i++)
+            if (!strcmp(n | "", SOUND_NAMES[i])) m |= (1 << i);
+        soundAvail = m;
+        Serial.printf("[voz] sons do Hub: 0x%02x\n", m);
+        break;
+      }
+      if (!strcmp(mt, "sound")) {
+        const char* ss = doc["state"] | "";
+        if (!strcmp(ss, "start")) {
+          Serial.println("[voz] aviso: inicio");
+          soundBytes = 0;
+          soundMode = true;
+          rHead = rTail = 0;
+          hasOdd = false;
+          outActive = true;
+          outStarted = endReceived = false;
+          lastBinMs = millis();
+        } else if (!strcmp(ss, "end")) {
+          if (soundMode) {
+            endReceived = true;
+            if (ringCount() == 0) finishSpeaking(false);
+          } else {
+            soundWaiting = false;  // o Hub recusou (ocupado / sem o arquivo)
+          }
+        }
+        break;
+      }
+      if (strcmp(mt, "voice") != 0) break;
       const char* st = doc["state"] | "";
       if (!strcmp(st, "idle")) {
         if (!outActive) g_state = VOICE_IDLE;
@@ -155,6 +210,7 @@ void onEvent(WStype_t type, uint8_t* payload, size_t len) {
       break;
     }
     default:
+      if (soundMode) Serial.printf("[voz] aviso: evento WS %d (%u bytes)\n", (int)type, (unsigned)len);
       break;
   }
 }
@@ -191,7 +247,7 @@ void servicePlayback(uint32_t now) {
       finishSpeaking(true);
     } else if (outStarted) {
       outStarted = false;  // faltou áudio: espera juntar de novo
-    } else if (now - lastBinMs > 8000) {
+    } else if ((int32_t)(millis() - lastBinMs) > 8000) {  // "now" é de antes do vws.loop()
       finishSpeaking(true);  // o "end" se perdeu
     }
   }
@@ -211,6 +267,15 @@ void voiceTask(void*) {
         sendJson("{\"type\":\"stop\"}");
       }
     }
+
+    if (soundReq >= 0) {
+      int8_t i = soundReq;
+      soundReq = -1;
+      char js[48];
+      snprintf(js, sizeof js, "{\"type\":\"sound\",\"name\":\"%s\"}", SOUND_NAMES[i]);
+      sendJson(js);
+    }
+    if (soundWaiting && !soundMode && now - soundReqMs > 3000) soundWaiting = false;  // sem resposta
 
     bool toneWaiting = uxQueueMessagesWaiting(toneQ) > 0;
     bool toneOn = (int32_t)(toneUntil - now) > 0;
@@ -268,7 +333,24 @@ void voiceTone(uint16_t freq, uint16_t ms, uint16_t gap_ms) {
 
 bool voiceSoundBusy() {
   if (!toneQ) return false;
-  return uxQueueMessagesWaiting(toneQ) > 0 || (int32_t)(toneUntil - millis()) > 0 || outActive;
+  return uxQueueMessagesWaiting(toneQ) > 0 || (int32_t)(toneUntil - millis()) > 0 || outActive ||
+         soundWaiting;
+}
+
+bool voiceSound(const char* name) {
+  if (!g_conn || g_state != VOICE_IDLE || outActive || soundWaiting) {
+    Serial.printf("[voz] aviso %s sem Hub: conn %d estado %d fala %d pendente %d sons 0x%02x\n", name, g_conn,
+                  (int)g_state, outActive, soundWaiting, soundAvail);
+    return false;
+  }
+  for (uint8_t i = 0; i < N_SOUNDS; i++) {
+    if (strcmp(name, SOUND_NAMES[i]) || !(soundAvail & (1 << i))) continue;
+    soundReqMs = millis();
+    soundWaiting = true;
+    soundReq = i;
+    return true;
+  }
+  return false;
 }
 
 void voiceStopSpeaking() { g_stopReq = true; }

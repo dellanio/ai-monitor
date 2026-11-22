@@ -57,3 +57,5 @@ voice:
   wake_phrases: ["hey hermes", "hi hermes"]
   follow_up_s: 12      # sem você falar 12 s depois da resposta -> volta a esperar "Hey Hermes"
   keep_s: 300          # conversa no canal fica aberta 5 min (resposta rápida na próxima vez)
+  sounds_dir: ~/.dellmonitor/sounds   # needyou.* / finished.* / new.* (wav, mp3, ogg...)
+  sound_max_s: 6

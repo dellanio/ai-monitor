@@ -22,6 +22,9 @@ VoiceState voiceState();
 bool voiceConnected();
 // Avisos do monitor: entram numa fila e tocam em ordem (gap_ms de silêncio depois).
 void voiceTone(uint16_t freq, uint16_t ms, uint16_t gap_ms = 10);
+// Aviso com som do Hub ("needyou", "finished", "new"): arquivo escolhido no notebook.
+// false = o Hub não tem esse som, está desconectado ou numa conversa -> use voiceTone().
+bool voiceSound(const char* name);
 // true enquanto houver tom na fila ou fala tocando (para o monitor não empilhar avisos).
 bool voiceSoundBusy();
 // Toque durante a fala: para de falar (manda "stop" ao Hub).

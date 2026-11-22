@@ -68,18 +68,28 @@ static void onFinishedCb(const Session& s) {
 //   terminou        : "plim" agudo
 //   sessão nova     : toque curto e baixo
 // Todos os sons passam pela tarefa de voz (microfone e alto-falante dividem o I2S).
+// Primeiro tenta o som escolhido no notebook (Hub); sem ele, os toques de sempre.
 static void alertNow() {
-  voiceTone(880, 140, 10);
-  voiceTone(1318, 200);
+  bool hub = voiceSound("needyou");
+  Serial.printf("[som] precisa de voce: %s\n", hub ? "arquivo do Hub" : "toque embutido");
+  if (!hub) {
+    voiceTone(880, 140, 10);
+    voiceTone(1318, 200);
+  }
   servoNod();
 }
 
 static void chimeFinished() {
+  bool hub = voiceSound("finished");
+  Serial.printf("[som] terminou: %s\n", hub ? "arquivo do Hub" : "toque embutido");
+  if (hub) return;
   voiceTone(1568, 90, 10);
   voiceTone(2093, 140);
 }
 
-static void tickNew() { voiceTone(660, 60); }
+static void tickNew() {
+  if (!voiceSound("new")) voiceTone(660, 60);
+}
 
 static uint32_t g_lastNagMs = 0;
 static uint8_t g_nags = 0;

@@ -201,6 +201,40 @@ class VoiceSession:
             self.last_activity = time.monotonic()
         elif kind == "wake":  # toque/botão: o mesmo que dizer "Hey Hermes"
             await self.wake_up()
+        elif kind == "sound":
+            await self.play_sound(str(msg.get("name") or ""))
+
+    async def send_sounds(self) -> None:
+        names = self.server.sounds.available() if self.server.sounds else []
+        self._sounds_sent = names
+        try:
+            await self.ws.send(json.dumps({"type": "sounds", "names": names}))
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def play_sound(self, name: str) -> None:
+        """Aviso do monitor com o som escolhido; recusado (end sem start) se ocupado."""
+        pcm = None
+        if self.server.sounds and not (self.active or self.speaking or self.thinking):
+            pcm = await asyncio.to_thread(self.server.sounds.pcm, name)
+        try:
+            if pcm:
+                await self.ws.send(json.dumps({"type": "sound", "state": "start", "name": name}))
+                # Quadros de 100 ms: o cliente WebSocket do robô derruba a conexão com
+                # quadros acima de ~15 KB (WEBSOCKETS_MAX_DATA_SIZE).
+                for i in range(0, len(pcm), 4800):
+                    await self.ws.send(pcm[i:i + 4800])
+            await self.ws.send(json.dumps({"type": "sound", "state": "end", "name": name}))
+            log.info("voz: aviso %s %s", name, f"tocado ({len(pcm) / 48000:.1f} s)" if pcm else "recusado (ocupado/sem arquivo)")
+        except Exception:  # noqa: BLE001
+            pass
+
+    async def _sounds_watch(self) -> None:
+        """Avisa o robô quando você adiciona/remove um som (sem reiniciar nada)."""
+        while True:
+            await asyncio.sleep(15)
+            if self.server.sounds and self.server.sounds.available() != getattr(self, "_sounds_sent", None):
+                await self.send_sounds()
 
     async def close(self) -> None:
         self.active = False
@@ -215,6 +249,9 @@ class VoiceServer:
         self.wake = wake
         self.link = link or CanalLink("aimonitor", cfg.session, cfg.canal_url, cfg.keep_s, cfg.engine)
         self.current: VoiceSession | None = None
+        from .sounds import SoundBank
+        self.sounds = SoundBank(getattr(cfg, "sounds_dir", "~/.dellmonitor/sounds"),
+                                getattr(cfg, "sound_max_s", 6.0), getattr(cfg, "sound_gain", 1.0))
         self._server = None
         self._link_idle: asyncio.Task | None = None
 
@@ -269,6 +306,8 @@ class VoiceServer:
         self.current = sess
         log.info("voz: aparelho conectado %s", ws.remote_address)
         await sess.send_state("idle")
+        await sess.send_sounds()
+        sounds_task = asyncio.create_task(sess._sounds_watch())
         try:
             async for raw in ws:
                 if isinstance(raw, bytes):
@@ -282,6 +321,7 @@ class VoiceServer:
         except Exception as exc:  # noqa: BLE001
             log.info("voz: link encerrado (%r)", exc)
         finally:
+            sounds_task.cancel()
             await sess.close()
             if self.current is sess:
                 self.current = None

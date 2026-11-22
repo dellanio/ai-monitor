@@ -74,6 +74,9 @@ class VoiceConfig:
     wake_phrases: list = field(default_factory=lambda: ["hey hermes", "hi hermes"])
     follow_up_s: float = 12.0   # sem você falar por N s depois da resposta -> volta à espera
     keep_s: float = 300.0       # conversa no canal fica aberta N s após a última ativação
+    sounds_dir: str = "~/.dellmonitor/sounds"  # needyou.* / finished.* / new.* (wav, mp3, ogg...)
+    sound_max_s: float = 6.0    # corta sons longos
+    sound_gain: float = 1.0
 
 
 @dataclass

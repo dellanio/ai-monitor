@@ -226,11 +226,18 @@ void hubHandleJson(AppState& st, const String& payload, HubCallbacks& cb) {
   } else if (t == "finished") {
     String sid = doc["session_id"] | "";
     Session* s = findSession(st, sid);
+    Serial.printf("[hub] finished %s (%s)\n", sid.c_str(), s ? "na lista" : "fora da lista");
     if (s) {
       s->status = ST_FINISHED;
       s->detail = "turno concluido";
       s->updatedAt = millis();
       if (cb.onFinished) cb.onFinished(*s);
+    } else if (cb.onFinished) {  // ainda não chegou na lista (ou ficou fora do retrato): avisa mesmo assim
+      Session tmp;
+      tmp.id = sid;
+      tmp.title = doc["title"] | "";
+      tmp.status = ST_FINISHED;
+      cb.onFinished(tmp);
     }
   } else if (t == "usage") {
     String sid = doc["session_id"] | "";

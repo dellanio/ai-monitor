@@ -238,3 +238,24 @@ tests/
    (PCs sem GPU NVIDIA mostram `GPU --`); bateria só existe em
    notebooks; a taxa de rede da primeira amostra é `0.0`; o processo
    top depende de uma amostragem prévia do psutil.
+
+
+## Sons dos avisos
+
+Os avisos do robô tocam arquivos de som. O Hub já vem com sons em `hub/sounds/`
+(voz em português dizendo "Terminei!" e "Preciso de você.", e um sino para sessão
+nova); alternativas em `hub/sounds/opcoes/` e o gerador em `hub/sounds/gerar_sons.py`.
+
+Para usar os seus, coloque em `~/.dellmonitor/sounds/` (ou em `voice.sounds_dir`)
+arquivos com estes nomes, em qualquer formato que o FFmpeg leia (wav, mp3, ogg,
+m4a...). Um arquivo seu tem prioridade sobre o padrão:
+
+| Arquivo | Aviso |
+|---|---|
+| `needyou.*` | precisa de você |
+| `finished.*` | terminou |
+| `new.*` | sessão nova |
+
+Trocar um som = trocar o arquivo (vale em até 15 s, sem reiniciar nada nem regravar
+o robô). Sons longos são cortados em `voice.sound_max_s` (6 s). Sem o arquivo, com a
+voz desconectada ou no meio de uma conversa, o robô usa os toques embutidos.

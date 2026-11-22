@@ -90,6 +90,7 @@ def test_voice_session_routes_mic_only_after_wake_and_forwards_reply():
                     pass
             async with connect(f"ws://127.0.0.1:{port}/voice?token=token-de-teste-123") as ws:
                 assert json.loads(await ws.recv())["state"] == "idle"
+                assert json.loads(await ws.recv())["type"] == "sounds"  # sons disponiveis
                 await ws.send(b"\1\0" * 960)          # antes do "Hey Hermes": não vai ao canal
                 await asyncio.sleep(0.1)
                 assert len(link.pushed) == 0
