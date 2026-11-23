@@ -24,9 +24,12 @@ bool voiceConnected();
 void voiceTone(uint16_t freq, uint16_t ms, uint16_t gap_ms = 10);
 // Aviso com som do Hub ("needyou", "finished", "new"): arquivo escolhido no notebook.
 // false = o Hub não tem esse som, está desconectado ou numa conversa -> use voiceTone().
-bool voiceSound(const char* name);
+// source = ferramenta (hermes, claude, codex, timon, orca): o Hub toca "<nome>-<fonte>" se tiver.
+bool voiceSound(const char* name, const char* source = "");
 // true enquanto houver tom na fila ou fala tocando (para o monitor não empilhar avisos).
 bool voiceSoundBusy();
+// Volume 0..100% (do máximo SPEAKER_VOLUME); vale para avisos e para a fala.
+void voiceSetVolume(uint8_t pct);
 // Toque durante a fala: para de falar (manda "stop" ao Hub).
 void voiceStopSpeaking();
 // Contador que sobe a cada "Hey Hermes" (o main troca para o rosto ouvindo).

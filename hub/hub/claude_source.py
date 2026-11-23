@@ -28,6 +28,15 @@ from .sources import Source
 from .state import PendingApproval, Session
 
 MAX_TITLE_LEN = 60
+CLAUDE_SOURCES = ("claude", "orca")
+
+
+def source_for(cwd: str = "", entrypoint: str = "") -> str:
+    """Sessões do Claude Code abertas pelo Orca (bots em ~/.orca/) viram "orca"."""
+    if entrypoint == "orca":
+        return "orca"
+    parts = [p.lower() for p in str(cwd).replace("\\", "/").split("/")]
+    return "orca" if ".orca" in parts else "claude"
 
 
 def _text_of_content(content) -> str:
@@ -53,6 +62,7 @@ ASK_TOOLS = {
 def parse_session_file(path: Path) -> dict | None:
     """Read one Claude Code session JSONL. Returns {title, status, detail}."""
     title = ""
+    cwd = entrypoint = ""
     last_kind = None  # "user" | "assistant-text" | "assistant-tool" | "end_turn"
     last_tool = ""
     try:
@@ -67,6 +77,10 @@ def parse_session_file(path: Path) -> dict | None:
                     continue
                 if rec.get("isSidechain"):
                     continue
+                if not entrypoint and rec.get("entrypoint"):
+                    entrypoint = str(rec.get("entrypoint"))
+                if not cwd and rec.get("cwd"):
+                    cwd = str(rec.get("cwd"))
                 rtype = rec.get("type")
                 if rtype == "user":
                     if not title:
@@ -106,7 +120,7 @@ def parse_session_file(path: Path) -> dict | None:
     elif last_kind == "user":
         detail = "nova pergunta"
     title = " ".join((title or path.stem).split())[:MAX_TITLE_LEN] or path.stem
-    return {"title": title, "status": status, "detail": detail}
+    return {"title": title, "status": status, "detail": detail, "source": source_for(cwd, entrypoint)}
 
 
 class ClaudeSource(Source):
@@ -144,7 +158,13 @@ class ClaudeSource(Source):
     async def _watch_loop(self) -> None:
         while True:
             try:
-                self._scan()
+                # Listar ~/.claude/projects (milhares de arquivos) e ler os JSONL
+                # mexidos leva segundos: roda numa thread. Feito no loop, travava o
+                # Hub e os aparelhos caíam (TCP cheio -> quadros WebSocket cortados).
+                files = await asyncio.to_thread(self._list_recent)
+                need = [x for x in files if self._needs_parse(x)]
+                parsed = await asyncio.to_thread(lambda: {x[1]: parse_session_file(x[0]) for x in need})
+                self._apply(files, parsed)
             except Exception as exc:
                 self.log.debug("Claude scan failed: %s", exc)
             await asyncio.sleep(self.poll_interval)
@@ -155,16 +175,13 @@ class ClaudeSource(Source):
         parts = [p for p in dirname.split("--") if p]
         return (parts[-1] if parts else dirname)[-40:]
 
-    def _scan(self) -> None:
-        """Só sessões mexidas nas últimas ``recent_hours``; arquivo sem mudança
-        não é relido. Parado há mais de ``stale_after_s`` sem fim de turno
-        vira "idle" (sessão abandonada não fica "trabalhando" para sempre)."""
+    def _list_recent(self) -> list:
+        """(arquivo, sid, mtime, projeto) das sessões mexidas nas últimas ``recent_hours``."""
         if not self.root.is_dir():
-            return
+            return []
         now = time.time()
         window = float(getattr(self.cfg, "recent_hours", 6.0)) * 3600
-        stale = float(getattr(self.cfg, "stale_after_s", 600.0))
-        seen: set[str] = set()
+        out = []
         for project_dir in self.root.iterdir():
             if not project_dir.is_dir():
                 continue
@@ -173,39 +190,55 @@ class ClaudeSource(Source):
                     mtime = f.stat().st_mtime
                 except OSError:
                     continue
-                if now - mtime > window:
+                if now - mtime <= window:
+                    out.append((f, f.stem, mtime, self._project_name(project_dir.name)))
+        return out
+
+    def _needs_parse(self, item) -> bool:
+        _, sid, mtime, _ = item
+        return not (self._mtimes.get(sid) == mtime and sid in self.hub.state.sessions)
+
+    def _scan(self) -> None:
+        """Versão síncrona (testes): lista, lê e aplica de uma vez."""
+        files = self._list_recent()
+        self._apply(files, {x[1]: parse_session_file(x[0]) for x in files if self._needs_parse(x)})
+
+    def _apply(self, files: list, parsed_by_sid: dict) -> None:
+        """Arquivo sem mudança não é relido. Parado há mais de ``stale_after_s``
+        sem fim de turno vira "idle" (sessão abandonada não fica "trabalhando")."""
+        now = time.time()
+        stale = float(getattr(self.cfg, "stale_after_s", 600.0))
+        seen: set[str] = set()
+        for _f, sid, mtime, project in files:
+            seen.add(sid)
+            existing = self.hub.state.sessions.get(sid)
+            if sid not in parsed_by_sid:
+                if existing is not None and existing.status == "working" and now - mtime > stale:
+                    self.hub.state.set_session_status(sid, "idle", "parada")
+                continue
+            self._mtimes[sid] = mtime
+            parsed = parsed_by_sid[sid]
+            if parsed is None:
+                continue
+            status, detail = parsed["status"], parsed["detail"]
+            if status == "working" and now - mtime > stale:
+                status, detail = "idle", "parada"
+            # A finished session stays finished; a new user message reopens it.
+            if existing is not None and existing.source in CLAUDE_SOURCES:
+                if existing.status == "finished" and status == "finished":
                     continue
-                sid = f.stem
-                seen.add(sid)
-                existing = self.hub.state.sessions.get(sid)
-                cached = self._mtimes.get(sid)
-                if cached == mtime and existing is not None:
-                    if existing.status == "working" and now - mtime > stale:
-                        self.hub.state.set_session_status(sid, "idle", "parada")
-                    continue
-                self._mtimes[sid] = mtime
-                parsed = parse_session_file(f)
-                if parsed is None:
-                    continue
-                status, detail = parsed["status"], parsed["detail"]
-                if status == "working" and now - mtime > stale:
-                    status, detail = "idle", "parada"
-                # A finished session stays finished; a new user message reopens it.
-                if existing is not None and existing.source == "claude":
-                    if existing.status == "finished" and status == "finished":
-                        continue
-                self.hub.upsert_session(
-                    Session(
-                        id=sid,
-                        title=parsed["title"],
-                        source="claude",
-                        profile=self._project_name(project_dir.name),
-                        status=status,
-                        detail=detail,
-                    )
+            self.hub.upsert_session(
+                Session(
+                    id=sid,
+                    title=parsed["title"],
+                    source=parsed.get("source", "claude"),
+                    profile=project,
+                    status=status,
+                    detail=detail,
                 )
+            )
         for sid in [s.id for s in self.hub.state.sessions.values()
-                    if s.source == "claude" and s.id not in seen and s.status != "needs-you"]:
+                    if s.source in CLAUDE_SOURCES and s.id not in seen and s.status != "needs-you"]:
             self._mtimes.pop(sid, None)
             self.hub.state.remove_session(sid)
 
@@ -231,6 +264,8 @@ class ClaudeSource(Source):
         except Exception:
             return web.json_response({"decision": "ok"}, status=400)
         event = payload.get("hook_event_name", "")
+        if event.startswith("Demo"):
+            return await self._handle_demo(payload)
         session_id = payload.get("session_id", "") or self._session_id_from_transcript(payload)
         if event == "PreToolUse":
             # Só status: NUNCA bloqueia nem decide (dispara em toda ferramenta).
@@ -245,7 +280,8 @@ class ClaudeSource(Source):
             if session_id:
                 self.hub.state.set_session_status(session_id, "finished")
                 s = self.hub.state.sessions.get(session_id)
-                await self.hub.push_finished(session_id, s.title if s else session_id)
+                await self.hub.push_finished(session_id, s.title if s else session_id,
+                                             source=s.source if s else source_for(payload.get("cwd", "")))
                 await self.hub.push_sessions()
             return web.json_response({"decision": "ok"})
         if event == "SessionStart":
@@ -255,7 +291,7 @@ class ClaudeSource(Source):
                     Session(
                         id=session_id,
                         title=os.path.basename(cwd.rstrip("/")) or session_id,
-                        source="claude",
+                        source=source_for(cwd),
                         profile=os.path.basename(cwd.rstrip("/")) or None,
                         status="working",
                         detail="sessao iniciada",
@@ -276,13 +312,63 @@ class ClaudeSource(Source):
             return web.json_response({"decision": "ok"})
         return web.json_response({"decision": "ok"})
 
+    async def _handle_demo(self, payload: dict) -> web.Response:
+        """Eventos de demonstração (hub/tools/demo.py). Só chegam pelo endpoint
+        local (127.0.0.1) e só mexem em sessões com id "demo-*"."""
+        from .sounds import SOURCES
+
+        event = payload.get("hook_event_name", "")
+        sid = str(payload.get("session_id", ""))
+        if event == "DemoClear":
+            if self.hub.state.remove_approval("demo-ap") is not None:
+                await self.hub.device.push_approval_cancelled("demo-ap")
+            for k in [k for k in self.hub.state.sessions if k.startswith("demo-")]:
+                self.hub.state.remove_session(k)
+            await self.hub.push_sessions()
+            return web.json_response({"decision": "ok"})
+        if event == "DemoScreen":  # tela/rosto no aparelho: list | stats | face (+ mood 0..7, -1 = normal)
+            await self.hub.device.broadcast({"type": "demo", "screen": str(payload.get("screen", "")),
+                                             "mood": int(payload.get("mood", -1))})
+            return web.json_response({"decision": "ok"})
+        if not sid.startswith("demo-"):
+            return web.json_response({"decision": "ok"}, status=400)
+        source = str(payload.get("source", "claude"))
+        if source not in SOURCES:
+            source = "claude"
+        title = str(payload.get("title", sid))[:MAX_TITLE_LEN]
+        if event == "DemoStart":
+            self.hub.upsert_session(Session(id=sid, title=title, source=source,
+                                            profile=str(payload.get("profile", "demo")),
+                                            status="working", detail=str(payload.get("detail", "trabalhando"))))
+        elif event == "DemoNeedYou":
+            self.hub.state.set_session_status(sid, "needs-you", str(payload.get("detail", "pedindo permissao")))
+        elif event == "DemoApproval":  # tela "precisa de você" com a decisão pendente
+            from .state import PendingApproval
+
+            ap = PendingApproval(request_id="demo-ap", session_id=sid, source=source,
+                                 command=str(payload.get("command", "")),
+                                 description=str(payload.get("description", "")),
+                                 choices=["once", "deny"])
+            self.hub.state.set_session_status(sid, "needs-you", "esperando sua decisao")
+            self.hub.state.add_approval(ap)
+            await self.hub.device.push_approval(ap)
+        elif event == "DemoApprovalEnd":
+            if self.hub.state.remove_approval("demo-ap") is not None:
+                await self.hub.device.push_approval_cancelled("demo-ap")
+            self.hub.state.set_session_status(sid, "working", "aprovado, continuando...")
+        elif event == "DemoFinish":
+            self.hub.state.set_session_status(sid, "finished", "turno concluido")
+            await self.hub.push_finished(sid, title, source=source)
+        await self.hub.push_sessions()
+        return web.json_response({"decision": "ok"})
+
     def _ensure_session(self, payload: dict, session_id: str) -> None:
         """Hooks podem chegar antes do watcher achar o JSONL: cria a sessão."""
         if session_id in self.hub.state.sessions:
             return
         cwd = str(payload.get("cwd", "")).rstrip("/\\")
         name = os.path.basename(cwd) or session_id[:8]
-        self.hub.upsert_session(Session(id=session_id, title=name, source="claude",
+        self.hub.upsert_session(Session(id=session_id, title=name, source=source_for(cwd),
                                         profile=name, status="working", detail=""))
 
     @staticmethod
@@ -319,7 +405,7 @@ class ClaudeSource(Source):
         # Reuse an open approval for the same tool call (Notification +
         # PreToolUse can both fire for one permission prompt).
         for ap in self.hub.state.pending.values():
-            if ap.source == "claude" and ap.dedupe_key == dedupe_key and ap.answer is not None:
+            if ap.source in CLAUDE_SOURCES and ap.dedupe_key == dedupe_key and ap.answer is not None:
                 choice = await self._await_answer(ap)
                 return web.json_response(self._decision_response(choice))
 
@@ -327,7 +413,7 @@ class ClaudeSource(Source):
         ap = PendingApproval(
             request_id=f"claude-{dedupe_key}-{int(time.time())}",
             session_id=session_id,
-            source="claude",
+            source=source_for(payload.get("cwd", "")),
             command=f"{tool_name}: {input_summary}",
             description=f"Claude Code quer usar {tool_name}",
             choices=["once", "deny"],

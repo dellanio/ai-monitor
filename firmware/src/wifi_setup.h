@@ -27,3 +27,7 @@ void wifiSetupSetStatus(const String& msg, uint16_t color);
 void wifiPortalLoop();
 // Inicia o mDNS (dellmonitor.local). Chamar após conectar.
 void wifiStartMDNS();
+
+// Volume salvo na placa (0..100%).
+uint8_t settingsLoadVolume();
+void settingsSaveVolume(uint8_t pct);

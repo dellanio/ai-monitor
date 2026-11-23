@@ -29,6 +29,19 @@ def test_bank_decodes_resamples_caps_and_caches(tmp_path):
     assert b.pcm("new") is None
 
 
+def test_bank_prefers_the_tool_version_and_falls_back(tmp_path):
+    user, builtin = tmp_path / "u", tmp_path / "b"
+    user.mkdir(); builtin.mkdir()
+    _wav(builtin / "finished.wav", secs=0.3)
+    _wav(user / "finished-claude.wav", secs=0.6)
+    b = SoundBank(str(user), builtin_dir=builtin)
+    assert b.find("finished", "claude").name == "finished-claude.wav"
+    assert b.find("finished", "hermes").name == "finished.wav"      # sem versão: genérico
+    assert b.find("finished", "../x").name == "finished.wav"       # fonte desconhecida
+    assert abs(len(b.pcm("finished", "claude")) / 48000 - 0.6) < 0.02
+    assert abs(len(b.pcm("finished")) / 48000 - 0.3) < 0.02        # cache separado
+
+
 class FakeWS:
     def __init__(self):
         self.sent = []

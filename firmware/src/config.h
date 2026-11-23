@@ -36,7 +36,7 @@
 #ifndef DISPLAY_ROTATION
 #define DISPLAY_ROTATION 1            // 0..3; ajuste se a tela ficar de lado
 #endif
-#define SPEAKER_VOLUME 180            // 0..255
+#define SPEAKER_VOLUME 255            // 0..255 (maximo)
 #define MAX_SESSIONS 20               // igual ao limite do produto de referência
 
 // ---------------------------------------------------------------------------

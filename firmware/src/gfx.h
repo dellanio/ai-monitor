@@ -8,3 +8,4 @@ bool gfxBegin();
 LovyanGFX& G();
 void gfxPresent();
 bool gfxBuffered();
+void gfxDumpSerial();  // captura do quadro pela USB (bancada)

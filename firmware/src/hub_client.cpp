@@ -200,6 +200,7 @@ void hubHandleJson(AppState& st, const String& payload, HubCallbacks& cb) {
     ap.active = true;
     ap.requestId = doc["request_id"] | "";
     ap.sessionId = doc["session_id"] | "";
+    ap.source = doc["source"] | "";
     ap.command = doc["command"] | "";
     ap.description = doc["description"] | "";
     JsonArray ch = doc["choices"].as<JsonArray>();
@@ -223,6 +224,12 @@ void hubHandleJson(AppState& st, const String& payload, HubCallbacks& cb) {
       st.approval.active = false;
     }
     if (cb.onApprovalCancelled) cb.onApprovalCancelled(rid);
+  } else if (t == "demo") {
+    String scr = doc["screen"] | "";
+    st.demoMood = (int8_t)(doc["mood"] | -1);
+    st.demoScreen = scr == "list" ? 0 : scr == "stats" ? 1 : scr == "face" ? 2 : -1;
+    if (st.demoScreen != 2) st.demoMood = -1;
+    Serial.printf("[demo] tela %s, rosto %d\n", scr.c_str(), st.demoMood);
   } else if (t == "finished") {
     String sid = doc["session_id"] | "";
     Session* s = findSession(st, sid);
@@ -236,6 +243,7 @@ void hubHandleJson(AppState& st, const String& payload, HubCallbacks& cb) {
       Session tmp;
       tmp.id = sid;
       tmp.title = doc["title"] | "";
+      tmp.source = doc["source"] | "";
       tmp.status = ST_FINISHED;
       cb.onFinished(tmp);
     }

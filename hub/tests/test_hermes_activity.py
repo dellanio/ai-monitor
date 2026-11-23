@@ -1,66 +1,61 @@
-"""Sessões do Hermes fora do WS do painel (Telegram, desktop): fim detectado pelo REST."""
+"""Sessões do Hermes: execução visível e sessões paradas."""
 import asyncio
-import logging
-from types import SimpleNamespace
+import time
 
 from hub.hermes_client import HermesClient
-from hub.state import HubState
+from hub.state import HubState, Session
 
 
 class FakeHub:
     def __init__(self):
         self.state = HubState()
+        self.log = __import__("logging").getLogger("t")
         self.finished = []
-        self.log = logging.getLogger("test")
 
     def upsert_session(self, s):
         self.state.upsert_session(s)
 
-    async def push_finished(self, sid, title):
-        self.finished.append((sid, title))
+    async def push_finished(self, sid, title, source=""):
+        self.finished.append(sid)
 
     async def push_sessions(self):
         pass
 
 
-def make(rows, tails):
-    hub = FakeHub()
-    cfg = SimpleNamespace(ws_url="ws://x/api/ws", rest_base="http://x", token=None, reconnect_delay_s=1,
-                          ping_interval_s=1, cron_refresh_s=60)
-    c = HermesClient.__new__(HermesClient)
-    HermesClient.__init__(c, hub, cfg)
+def _src(rows, tails):
+    src = HermesClient.__new__(HermesClient)
+    src.hub = FakeHub()
+    src.log = src.hub.log
+    src._activity = {}
+    src._activity_primed = True
+    src._known_sessions = set()
+    src._live_ids = set()
+    src.finish_skip_sources = set()
+    src.stale_after = 900
 
-    async def rest(path):
-        if path.startswith("/api/sessions?"):
+    async def rest_get(path):
+        if path.startswith("/api/profiles/sessions") or path.startswith("/api/sessions?"):
             return {"sessions": rows}
         sid = path.split("/")[3]
         return {"messages": [tails[sid]]}
-    c._rest_get = rest
-    return c, hub
+
+    src._rest_get = rest_get
+    return src
 
 
-def test_classify_tail():
-    k = HermesClient.classify_tail
-    assert k({"role": "assistant", "tool_calls": None})[0] == "finished"
-    assert k({"role": "assistant", "tool_calls": [{"function": {"name": "terminal"}}]}) == ("working", "tool: terminal")
-    assert k({"role": "assistant", "tool_calls": [{"function": {"name": "clarify"}}]})[0] == "needs-you"
-    assert k({"role": "tool"})[0] == "working"
+def test_running_session_stays_working_after_sessions_refresh():
+    now = time.time()
+    rows = [{"id": "a", "title": "Rodando", "message_count": 3, "last_active": now, "source": "local"}]
+    src = _src(rows, {"a": {"role": "user", "content": "faz x"}})
+    src.hub.state.upsert_session(Session(id="a", title="Rodando", source="hermes", status="idle"))
+    asyncio.run(src._poll_activity())
+    assert src.hub.state.sessions["a"].status == "working"
+    asyncio.run(src._refresh_rest_sessions())          # sessions.changed
+    assert src.hub.state.sessions["a"].status == "working"
 
 
-def test_telegram_session_finishes_with_plim_and_oneshot_is_silent():
-    async def go():
-        rows = [{"id": "tg", "source": "telegram", "title": "Fabrica", "message_count": 3, "last_active": 1, "ended_at": None},
-                {"id": "os", "source": "oneshot", "preview": "voz", "message_count": 1, "last_active": 1, "ended_at": None}]
-        tails = {"tg": {"role": "assistant", "tool_calls": [{"function": {"name": "terminal"}}]},
-                 "os": {"role": "user"}}
-        c, hub = make(rows, tails)
-        await c._poll_activity()                      # retrato inicial: sem som
-        assert hub.finished == [] and hub.state.sessions["tg"].status == "working"
-        rows[0].update(message_count=5, last_active=2); tails["tg"] = {"role": "assistant", "tool_calls": None}
-        rows[1].update(message_count=2, last_active=2, ended_at=3); tails["os"] = {"role": "assistant"}
-        await c._poll_activity()
-        assert hub.finished == [("tg", "Fabrica")]
-        await c._poll_activity()                      # sem mudança: não repete
-        assert hub.finished == [("tg", "Fabrica")]
-        await c._session.close()
-    asyncio.run(go())
+def test_old_unfinished_session_is_idle():
+    rows = [{"id": "b", "title": "Velha", "message_count": 9, "last_active": time.time() - 7200, "source": "local"}]
+    src = _src(rows, {"b": {"role": "tool", "content": "x"}})
+    asyncio.run(src._poll_activity())
+    assert src.hub.state.sessions["b"].status == "idle"

@@ -20,6 +20,9 @@ from pathlib import Path
 log = logging.getLogger("hub.sounds")
 
 NAMES = ("needyou", "finished", "new")
+# Versões por ferramenta: "<nome>-<fonte>.*" (ex.: finished-claude.mp3, "Claude terminou").
+# Sem a versão da ferramenta, toca o "<nome>.*" genérico.
+SOURCES = ("hermes", "claude", "codex", "timon", "orca")
 EXTS = (".wav", ".mp3", ".ogg", ".m4a", ".flac", ".aac", ".opus", ".webm")
 RATE = 24000
 BUILTIN_DIR = Path(__file__).resolve().parent.parent / "sounds"
@@ -67,27 +70,30 @@ class SoundBank:
         self.gain = float(gain)
         self._cache: dict[str, tuple[Path, float, bytes]] = {}
 
-    def find(self, name: str) -> Path | None:
+    def find(self, name: str, source: str = "") -> Path | None:
         if name not in NAMES:
             return None
-        for d in self.dirs:  # o seu primeiro, depois o padrão do Hub
-            if not d.is_dir():
-                continue
-            for ext in EXTS:
-                p = d / f"{name}{ext}"
-                if p.is_file():
-                    return p
+        stems = ([f"{name}-{source}"] if source in SOURCES else []) + [name]
+        for stem in stems:  # a versão da ferramenta primeiro, depois a genérica
+            for d in self.dirs:  # o seu primeiro, depois o padrão do Hub
+                if not d.is_dir():
+                    continue
+                for ext in EXTS:
+                    p = d / f"{stem}{ext}"
+                    if p.is_file():
+                        return p
         return None
 
     def available(self) -> list[str]:
         return [n for n in NAMES if self.find(n)]
 
-    def pcm(self, name: str) -> bytes | None:
-        p = self.find(name)
+    def pcm(self, name: str, source: str = "") -> bytes | None:
+        p = self.find(name, source)
         if p is None:
             return None
         mt = p.stat().st_mtime
-        hit = self._cache.get(name)
+        key = p.stem
+        hit = self._cache.get(key)
         if hit and hit[0] == p and hit[1] == mt:
             return hit[2]
         try:
@@ -95,6 +101,6 @@ class SoundBank:
         except Exception as exc:  # noqa: BLE001
             log.warning("som %s: nao consegui ler %s (%s)", name, p.name, exc)
             return None
-        self._cache[name] = (p, mt, data)
+        self._cache[key] = (p, mt, data)
         log.info("som %s: %s (%.1f s)", name, p.name, len(data) / 2 / RATE)
         return data

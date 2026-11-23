@@ -51,6 +51,15 @@ class TimonConfig:
 
 
 @dataclass
+class CodexConfig:
+    enabled: bool = False
+    sessions_root: str = "~/.codex/sessions"
+    poll_interval_s: float = 3.0
+    recent_hours: float = 6.0
+    stale_after_s: float = 600.0
+
+
+@dataclass
 class HostStatsConfig:
     enabled: bool = True
     interval_s: float = 2.0
@@ -87,6 +96,7 @@ class Config:
     approval: ApprovalConfig = field(default_factory=ApprovalConfig)
     host: HostStatsConfig = field(default_factory=HostStatsConfig)
     timon: TimonConfig = field(default_factory=TimonConfig)
+    codex: CodexConfig = field(default_factory=CodexConfig)
     voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
@@ -113,6 +123,7 @@ def load_config(path: str) -> Config:
         cfg.approval = _merge(ApprovalConfig(), data.get("approval", {}) or {})
         cfg.host = _merge(HostStatsConfig(), data.get("host", {}) or {})
         cfg.timon = _merge(TimonConfig(), data.get("timon", {}) or {})
+        cfg.codex = _merge(CodexConfig(), data.get("codex", {}) or {})
         cfg.voice = _merge(VoiceConfig(), data.get("voice", {}) or {})
     # Environment overrides (handy for tests and containers).
     if os.environ.get("DELLMONITOR_DEVICE_PORT"):

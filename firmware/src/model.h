@@ -47,6 +47,7 @@ struct Approval {
   bool active = false;
   String requestId;
   String sessionId;
+  String source;   // ferramenta (hermes, claude...) para o aviso falado
   String command;
   String description;
   String choices;  // ex.: "once,session,always,deny"
@@ -99,16 +100,31 @@ struct AppState {
   String hubToken;              // segredo de pareamento (Preferences "hubtok")
   bool hubActions = false;      // o Hub aceita aprovar pelo toque? (hello)
   String approvalDismissedId;   // aprovação que o usuário mandou "ver depois"
-  int listPage = 0;             // página da lista (3 sessões por página)
+  int listPage = 0;
+  uint8_t volumePct = 100;      // volume do alto-falante (Configurações; Preferences "vol")             // página da lista (3 sessões por página)
   // Sons pendentes (o loop toca; o parser só marca).
-  uint8_t sndNeedYou = 0;       // sessão passou a precisar de você
-  uint8_t sndNew = 0;           // sessão nova começou
+  // Fila de avisos falados (um por evento, tocados em ordem). Antes eram
+  // contadores: vários eventos seguidos viravam um só aviso.
+  static const uint8_t SND_Q = 10;
+  uint8_t sndKind[SND_Q];       // SND_NEEDYOU / SND_FINISHED / SND_NEW
+  String sndSrc[SND_Q];
+  uint8_t sndHead = 0, sndCount = 0;
+  // Demonstração (mensagem "demo" do Hub): tela pedida e rosto fixo.
+  int8_t demoScreen = -1;       // -1 nada; 0 lista, 1 computador, 2 rosto
+  int8_t demoMood = -1;         // -1 = rosto normal; senão FaceMood
   uint32_t snapshots = 0;       // retratos recebidos desde a conexão
   String wifiSsid;
   String ipAddress;
   uint32_t lastTouchMs = 0;
   int selectedSession = -1;   // índice da sessão no detalhe, -1 = lista
 };
+
+enum SndKind : uint8_t { SND_NEEDYOU = 0, SND_FINISHED = 1, SND_NEW = 2 };
+// Enfileira um aviso (descarta o mais antigo se a fila encher).
+void sndPush(AppState& st, uint8_t kind, const String& src);
+// Tira o próximo aviso; false se a fila está vazia.
+bool sndPop(AppState& st, uint8_t& kind, String& src);
+
 
 Session* findSession(AppState& st, const String& id);
 void upsertSession(AppState& st, const Session& s);

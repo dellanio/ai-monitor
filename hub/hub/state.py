@@ -86,6 +86,7 @@ class PendingApproval:
             "type": "approval",
             "session_id": self.session_id,
             "request_id": self.request_id,
+            "source": self.source,
             "command": device_text(self.command),
             "description": device_text(self.description),
             "choices": list(self.choices),

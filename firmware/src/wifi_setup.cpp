@@ -6,6 +6,7 @@
 // linha de status ao vivo (aguardando / conectando / conectado / erro).
 // O portal lista as redes encontradas por scan, com barras de sinal.
 #include "wifi_setup.h"
+#include "hw.h"
 #include "config.h"
 
 #include <WiFi.h>
@@ -47,79 +48,79 @@ static uint32_t portalRestartAt = 0;
 
 // Círculo numerado do passo (fundo âmbar, número preto).
 static void drawStepBadge(int cx, int cy, const char* n) {
-  M5.Display.fillCircle(cx, cy, 9, COL_ACCENT);
-  M5.Display.setTextColor(0x0000, COL_ACCENT);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(cx - 3, cy - 4);
-  M5.Display.print(n);
+  DISP.fillCircle(cx, cy, 9, COL_ACCENT);
+  DISP.setTextColor(0x0000, COL_ACCENT);
+  DISP.setTextSize(1);
+  DISP.setCursor(cx - 3, cy - 4);
+  DISP.print(n);
 }
 
 void wifiSetupSetStatus(const String& msg, uint16_t color) {
   // Redesenha só a faixa de status (evita piscar a tela inteira).
-  M5.Display.fillRoundRect(10, 168, 300, 34, 6, COL_PANEL);
-  M5.Display.setTextColor(color, COL_PANEL);
+  DISP.fillRoundRect(10, 168, 300, 34, 6, COL_PANEL);
+  DISP.setTextColor(color, COL_PANEL);
   String m = msg;
   if (m.length() > 26) {
-    M5.Display.setTextSize(1);
-    M5.Display.setCursor(10 + (300 - (int)m.length() * 6) / 2, 181);
+    DISP.setTextSize(1);
+    DISP.setCursor(10 + (300 - (int)m.length() * 6) / 2, 181);
   } else {
-    M5.Display.setTextSize(2);
-    M5.Display.setCursor(10 + (300 - (int)m.length() * 12) / 2, 177);
+    DISP.setTextSize(2);
+    DISP.setCursor(10 + (300 - (int)m.length() * 12) / 2, 177);
   }
-  M5.Display.print(m);
+  DISP.print(m);
 }
 
 static void wifiSetupDrawScreen() {
-  M5.Display.clear(COL_BG);
-  M5.Display.setTextColor(COL_TEXT, COL_BG);
-  M5.Display.setTextSize(3);
-  M5.Display.setCursor(10, 6);
-  M5.Display.println(DELLMONITOR_NAME);
-  M5.Display.setTextColor(COL_MUTED, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(10, 34);
-  M5.Display.println("Configurar Wi-Fi");
+  DISP.clear(COL_BG);
+  DISP.setTextColor(COL_TEXT, COL_BG);
+  DISP.setTextSize(3);
+  DISP.setCursor(10, 6);
+  DISP.println(DELLMONITOR_NAME);
+  DISP.setTextColor(COL_MUTED, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(10, 34);
+  DISP.println("Configurar Wi-Fi");
 
   // Passo 1: o AP do aparelho.
   drawStepBadge(19, 57, "1");
-  M5.Display.setTextColor(COL_TEXT, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(32, 53);
-  M5.Display.println("Conecte no Wi-Fi:");
-  M5.Display.setTextColor(COL_ACCENT, COL_BG);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(10, 66);
-  M5.Display.println(SETUP_AP_SSID);
+  DISP.setTextColor(COL_TEXT, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(32, 53);
+  DISP.println("Conecte no Wi-Fi:");
+  DISP.setTextColor(COL_ACCENT, COL_BG);
+  DISP.setTextSize(2);
+  DISP.setCursor(10, 66);
+  DISP.println(SETUP_AP_SSID);
 
   // Passo 2: QR code + URL.
   drawStepBadge(19, 99, "2");
-  M5.Display.setTextColor(COL_TEXT, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(32, 95);
-  M5.Display.println("Escaneie o QR ou abra:");
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(10, 108);
-  M5.Display.println("192.168.4.1");
-  M5.Display.qrcode("http://192.168.4.1", 216, 44, 96, 3, true);
-  M5.Display.setTextColor(COL_MUTED, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(216 + (96 - 8 * 6) / 2, 144);
-  M5.Display.println("escaneie");
+  DISP.setTextColor(COL_TEXT, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(32, 95);
+  DISP.println("Escaneie o QR ou abra:");
+  DISP.setTextSize(2);
+  DISP.setCursor(10, 108);
+  DISP.println("192.168.4.1");
+  DISP.qrcode("http://192.168.4.1", 216, 44, 96, 3, true);
+  DISP.setTextColor(COL_MUTED, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(216 + (96 - 8 * 6) / 2, 144);
+  DISP.println("escaneie");
 
   // Passo 3: escolher a rede no portal.
   drawStepBadge(19, 141, "3");
-  M5.Display.setTextColor(COL_TEXT, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(32, 137);
-  M5.Display.println("Escolha sua rede,");
-  M5.Display.setCursor(32, 149);
-  M5.Display.println("digite a senha e salve.");
+  DISP.setTextColor(COL_TEXT, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(32, 137);
+  DISP.println("Escolha sua rede,");
+  DISP.setCursor(32, 149);
+  DISP.println("digite a senha e salve.");
 
   wifiSetupSetStatus("Aguardando conexao...", COL_TEXT);
-  M5.Display.setTextColor(COL_MUTED, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(10, 216);
-  M5.Display.println("Depois de conectar: dellmonitor.local");
+  DISP.setTextColor(COL_MUTED, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(10, 216);
+  DISP.println("Depois de conectar: dellmonitor.local");
 }
 
 // ---------------------------------------------------------------------------
@@ -362,23 +363,23 @@ bool wifiConnect(AppState& st) {
   if (ssid.length() == 0) return false;
 
   // Tela de progresso no aparelho (em vez de só o boot estático).
-  M5.Display.clear(COL_BG);
-  M5.Display.setTextColor(COL_TEXT, COL_BG);
-  M5.Display.setTextSize(3);
-  M5.Display.setCursor(16, 50);
-  M5.Display.println(DELLMONITOR_NAME);
-  M5.Display.setTextColor(COL_MUTED, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(16, 90);
-  M5.Display.println("Conectando a");
+  DISP.clear(COL_BG);
+  DISP.setTextColor(COL_TEXT, COL_BG);
+  DISP.setTextSize(3);
+  DISP.setCursor(16, 50);
+  DISP.println(DELLMONITOR_NAME);
+  DISP.setTextColor(COL_MUTED, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(16, 90);
+  DISP.println("Conectando a");
   String shortSsid = ssid;
   if (shortSsid.length() > 24) shortSsid = shortSsid.substring(0, 23) + "~";
-  M5.Display.setTextColor(COL_ACCENT, COL_BG);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(16, 104);
-  M5.Display.println(shortSsid);
+  DISP.setTextColor(COL_ACCENT, COL_BG);
+  DISP.setTextSize(2);
+  DISP.setCursor(16, 104);
+  DISP.println(shortSsid);
   // Barra de progresso (20 s).
-  M5.Display.drawRect(16, 132, 200, 10, COL_MUTED);
+  DISP.drawRect(16, 132, 200, 10, COL_MUTED);
 
   WiFi.mode(WIFI_STA);
   WiFi.setSleep(false);  // sem modem-sleep: WebSocket estável e sem atraso
@@ -386,17 +387,17 @@ bool wifiConnect(AppState& st) {
   uint32_t start = millis();
   while (WiFi.status() != WL_CONNECTED && millis() - start < 20000UL) {
     int fw = (int)((millis() - start) * 198 / 20000UL);
-    M5.Display.fillRect(17, 133, fw, 8, COL_ACCENT);
+    DISP.fillRect(17, 133, fw, 8, COL_ACCENT);
     delay(250);
   }
   if (WiFi.status() == WL_CONNECTED) {
     st.ipAddress = WiFi.localIP().toString();
     st.wifiSsid = ssid;
-    M5.Display.setTextColor(COL_WORKING, COL_BG);
-    M5.Display.setTextSize(2);
-    M5.Display.setCursor(16, 152);
-    M5.Display.print("Conectado! IP ");
-    M5.Display.println(st.ipAddress);
+    DISP.setTextColor(COL_WORKING, COL_BG);
+    DISP.setTextSize(2);
+    DISP.setCursor(16, 152);
+    DISP.print("Conectado! IP ");
+    DISP.println(st.ipAddress);
     // Relógio via NTP (America/Sao_Paulo, sem horário de verão).
     configTime(TZ_OFFSET_SEC, 0, NTP_SERVER_1, NTP_SERVER_2);
     delay(700);
@@ -404,20 +405,20 @@ bool wifiConnect(AppState& st) {
   }
   // Erro específico, na tela, antes de voltar ao portal.
   wl_status_t wst = WiFi.status();
-  M5.Display.setTextColor(0xF800, COL_BG);
-  M5.Display.setTextSize(2);
-  M5.Display.setCursor(16, 152);
+  DISP.setTextColor(0xF800, COL_BG);
+  DISP.setTextSize(2);
+  DISP.setCursor(16, 152);
   if (wst == WL_NO_SSID_AVAIL) {
-    M5.Display.println("Rede nao encontrada");
+    DISP.println("Rede nao encontrada");
   } else if (wst == WL_CONNECT_FAILED) {
-    M5.Display.println("Senha errada");
+    DISP.println("Senha errada");
   } else {
-    M5.Display.println("Nao foi possivel conectar");
+    DISP.println("Nao foi possivel conectar");
   }
-  M5.Display.setTextColor(COL_MUTED, COL_BG);
-  M5.Display.setTextSize(1);
-  M5.Display.setCursor(16, 176);
-  M5.Display.println("voltando ao portal...");
+  DISP.setTextColor(COL_MUTED, COL_BG);
+  DISP.setTextSize(1);
+  DISP.setCursor(16, 176);
+  DISP.println("voltando ao portal...");
   delay(2500);
   return false;
 }
@@ -501,4 +502,17 @@ void wifiPortalLoop() {
     delay(500);
     ESP.restart();
   }
+}
+
+uint8_t settingsLoadVolume() {
+  prefs.begin("dellmonitor", true);
+  uint8_t v = prefs.getUChar("vol", 100);
+  prefs.end();
+  return v > 100 ? 100 : v;
+}
+
+void settingsSaveVolume(uint8_t pct) {
+  prefs.begin("dellmonitor", false);
+  prefs.putUChar("vol", pct);
+  prefs.end();
 }

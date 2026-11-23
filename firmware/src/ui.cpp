@@ -1,10 +1,12 @@
 // AI Monitor v0.2 — telas 320x240 com o tema "espaço" e a Nous-Girl.
 // Tudo é desenhado no quadro em memória (gfx.h) e enviado de uma vez.
+#include "hw.h"
 #include "ui.h"
 
 #include <M5Unified.h>
 #include <WiFi.h>
 #include <time.h>
+#include <math.h>
 
 #include "config.h"
 #include "face.h"
@@ -116,6 +118,7 @@ static uint16_t sourceColor(const String& src) {
   if (src == "codex") return RGB565(120, 210, 255);
   if (src == "gemini") return RGB565(110, 150, 255);
   if (src == "timon") return RGB565(244, 196, 92);   // dourado
+  if (src == "orca") return RGB565(70, 220, 210);    // verde-água
   return COL_MUTED;
 }
 
@@ -145,15 +148,7 @@ String uiClockStr() {
   return String(buf);
 }
 
-bool uiReadTouch(int& x, int& y) {
-  auto t = M5.Touch.getDetail();
-  if (t.wasPressed()) {
-    x = t.x;
-    y = t.y;
-    return true;
-  }
-  return false;
-}
+bool uiReadTouch(int& x, int& y) { return hwTouchTap(x, y); }
 
 // ---------------------------------------------------------------------------
 // Humor (compartilhado pelo rosto e pelo avatar)
@@ -226,7 +221,7 @@ static void drawLimitBar(int x, int y, const char* label, int pct) {
   D.drawString((String(pct) + "%").c_str(), bx + bw + 4, y + 1);
 }
 
-void uiDrawHeader(const AppState& st, bool blink) {
+void uiDrawHeader(const AppState& st, bool blink, bool limits) {
   (void)blink;
   uint32_t now = millis();
   uint16_t ink;
@@ -254,7 +249,7 @@ void uiDrawHeader(const AppState& st, bool blink) {
     }
   }
   D.setTextColor(subCol);
-  D.drawString(fit(sub, 150).c_str(), 41, 22);
+  D.drawString(fit(sub, 84).c_str(), 41, 22);
 
   font(&fonts::FreeSansBold12pt7b);
   String clk = uiClockStr();
@@ -262,13 +257,15 @@ void uiDrawHeader(const AppState& st, bool blink) {
   D.setTextColor(COL_TEXT);
   D.drawString(clk.c_str(), 314 - cw, 6);
   D.fillCircle(314 - cw - 9, 17, 3, hubDotColor(st));
+  wifiBars(314 - cw - 34, 12, COL_FINISHED);
 
   D.drawFastHLine(0, HDR_H, 320, COL_BORDER);
 
   // Limites de uso (5h / semana / plano).
+  if (!limits) return;  // Configurações usam essa faixa para o título
   if (st.limits.valid) {
-    drawLimitBar(8, LIM_Y + 3, "5H", st.limits.fiveHourUsedPct);
-    drawLimitBar(118, LIM_Y + 3, "SEM", st.limits.weeklyUsedPct);
+    drawLimitBar(CARD_X + 2, LIM_Y + 3, "5H", st.limits.fiveHourUsedPct);
+    drawLimitBar(CARD_X + 108, LIM_Y + 3, "SEM", st.limits.weeklyUsedPct);
     if (st.limits.planRemaining.length()) {
       font(&fonts::Font0);
       D.setTextColor(COL_MUTED);
@@ -278,23 +275,91 @@ void uiDrawHeader(const AppState& st, bool blink) {
   } else {
     font(&fonts::Font0);
     D.setTextColor(COL_IDLE);
-    D.drawString("limites de uso: aguardando dados", 8, LIM_Y + 4);
+    D.drawString("limites de uso: aguardando dados", CARD_X + 2, LIM_Y + 4);
   }
 }
 
+// Pílulas do rodapé (posições usadas também no toque).
+static const int HUBP_X = CARD_X, HUBP_W = 98, CPUP_X = CARD_X + 104, CPUP_W = 314 - (CARD_X + 104);
+static const int PILL_Y = FOOTER_Y + 4, PILL_H = 30;
+
+static void antennaIcon(int cx, int cy, uint16_t c) {
+  D.fillCircle(cx, cy, 2, c);
+  D.fillRect(cx - 1, cy, 3, 8, c);
+  D.fillArc(cx, cy, 5, 6, 140, 220, c);
+  D.fillArc(cx, cy, 5, 6, 320, 360, c);
+  D.fillArc(cx, cy, 5, 6, 0, 40, c);
+  D.fillArc(cx, cy, 9, 10, 145, 215, c);
+  D.fillArc(cx, cy, 9, 10, 325, 360, c);
+  D.fillArc(cx, cy, 9, 10, 0, 35, c);
+}
+
 void uiDrawFooter(const AppState& st) {
-  D.fillRect(0, FOOTER_Y, 320, 240 - FOOTER_Y, COL_PANEL);
-  D.drawFastHLine(0, FOOTER_Y, 320, COL_BORDER);
-  wifiBars(8, FOOTER_Y + 5, COL_FINISHED);
-  font(&fonts::Font0);
-  D.setTextColor(COL_MUTED);
-  const char* hub = st.mockMode ? "demo" : (st.hubConnected ? "Hub ok" : "sem Hub");
-  D.fillCircle(32, FOOTER_Y + 10, 3, hubDotColor(st));
-  D.drawString(hub, 40, FOOTER_Y + 6);
-  String right = st.host.valid
-                     ? "CPU " + String(st.host.cpuPct) + "%  RAM " + String(st.host.memPct) + "%  >"
-                     : String("computador  >");
-  D.drawString(right.c_str(), 312 - D.textWidth(right.c_str()), FOOTER_Y + 6);
+  // Hub
+  uint16_t bg, bd, fg;
+  const char* hub;
+  if (st.mockMode) {
+    bg = blend(COL_PANEL, COL_NEEDYOU, 60); bd = COL_NEEDYOU; fg = COL_NEEDYOU; hub = "demo";
+  } else if (st.hubConnected) {
+    bg = blend(COL_FINISHED, 0xFFFF, 185); bd = COL_FINISHED; fg = RGB565(28, 70, 170); hub = "Hub ok";
+  } else {
+    bg = blend(COL_PANEL, COL_DANGER, 60); bd = COL_DANGER; fg = COL_DANGER; hub = "sem Hub";
+  }
+  D.fillRoundRect(HUBP_X - 1, PILL_Y - 1, HUBP_W + 2, PILL_H + 2, PILL_H / 2 + 1, blend(COL_BG, bd, 90));  // brilho
+  D.fillRoundRect(HUBP_X, PILL_Y, HUBP_W, PILL_H, PILL_H / 2, bg);
+  D.drawRoundRect(HUBP_X, PILL_Y, HUBP_W, PILL_H, PILL_H / 2, bd);
+  antennaIcon(HUBP_X + 16, PILL_Y + 12, fg);
+  font(&fonts::FreeSansBold9pt7b);
+  D.setTextColor(fg);
+  D.setTextDatum(textdatum_t::middle_left);
+  D.drawString(hub, HUBP_X + 30, PILL_Y + PILL_H / 2 + 1);
+
+  // CPU / RAM
+  uint16_t amb = COL_NEEDYOU;
+  D.fillRoundRect(CPUP_X, PILL_Y, CPUP_W, PILL_H, PILL_H / 2, blend(COL_PANEL, amb, 40));
+  D.drawRoundRect(CPUP_X, PILL_Y, CPUP_W, PILL_H, PILL_H / 2, blend(COL_PANEL, amb, 130));
+  int bx = CPUP_X + 10, by = PILL_Y + PILL_H / 2 + 6;
+  for (int i = 0; i < 4; i++) D.fillRect(bx + i * 4, by - 4 - i * 3, 3, 4 + i * 3, amb);
+  int ax = CPUP_X + CPUP_W - 11, ay = PILL_Y + PILL_H / 2;
+  D.fillTriangle(ax - 3, ay - 5, ax - 3, ay + 5, ax + 3, ay, COL_TEXT);
+  int x = bx + 18, maxW = ax - 8 - x;
+  int cy = PILL_Y + PILL_H / 2 + 1;
+  D.setTextDatum(textdatum_t::middle_left);
+  if (st.host.valid) {
+    String na = String(st.host.cpuPct) + "%", nb = String(st.host.memPct) + "%";
+    const int GAP = 3, DOT = 10;  // rótulo-número e separador
+    // Maior estilo que cabe: tudo em negrito; rótulo menor + número em negrito; tudo menor.
+    const lgfx::IFont* lf[3] = {&fonts::FreeSansBold9pt7b, &fonts::Font2, &fonts::Font2};
+    const lgfx::IFont* nf[3] = {&fonts::FreeSansBold9pt7b, &fonts::FreeSansBold9pt7b, &fonts::Font2};
+    int k = 0;
+    for (; k < 2; k++) {
+      font(lf[k]); int w = D.textWidth("CPU") + D.textWidth("RAM");
+      font(nf[k]); w += D.textWidth(na.c_str()) + D.textWidth(nb.c_str()) + 2 * GAP + DOT;
+      if (w <= maxW) break;
+    }
+    font(lf[k]); D.setTextDatum(textdatum_t::middle_left); D.setTextColor(amb);
+    D.drawString("CPU", x, cy); x += D.textWidth("CPU") + GAP;
+    font(nf[k]); D.setTextDatum(textdatum_t::middle_left); D.setTextColor(amb);
+    D.drawString(na.c_str(), x, cy); x += D.textWidth(na.c_str()) + DOT / 2;
+    D.fillCircle(x, cy - 1, 2, COL_TEXT); x += DOT / 2;
+    font(lf[k]); D.setTextDatum(textdatum_t::middle_left); D.setTextColor(COL_TEXT);
+    D.drawString("RAM", x, cy); x += D.textWidth("RAM") + GAP;
+    font(nf[k]); D.setTextDatum(textdatum_t::middle_left); D.setTextColor(COL_TEXT);
+    D.drawString(nb.c_str(), x, cy);
+  } else {
+    font(&fonts::FreeSansBold9pt7b);
+    D.setTextDatum(textdatum_t::middle_left);
+    D.setTextColor(amb);
+    D.drawString("computador", x, cy);
+  }
+  D.setTextDatum(textdatum_t::top_left);
+}
+
+int uiFooterHit(int tx, int ty) {
+  if (ty < FOOTER_Y) return 0;
+  if (tx >= HUBP_X - 4 && tx < HUBP_X + HUBP_W + 4) return 1;
+  if (tx >= CPUP_X - 4) return 2;
+  return 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -303,39 +368,39 @@ void uiDrawFooter(const AppState& st) {
 static void drawEmptyState(const AppState& st) {
   uint16_t ink;
   uiMoodFor(st, millis(), ink);
-  faceDrawAvatar(D, 128, 66, 64, ink);
+  faceDrawAvatar(D, 146, 66, 64, ink);
   font(&fonts::FreeSansBold9pt7b);
   D.setTextColor(COL_TEXT);
   D.setTextDatum(textdatum_t::top_center);
-  D.drawString(st.mockMode || st.hubConnected ? "Tudo tranquilo" : "Sem conexao com o Hub", 160, 140);
+  D.drawString(st.mockMode || st.hubConnected ? "Tudo tranquilo" : "Sem conexao com o Hub", 178, 140);
   font(&fonts::Font0);
   D.setTextColor(COL_MUTED);
   D.setTextDatum(textdatum_t::top_center);
   D.drawString(st.mockMode || st.hubConnected ? "nenhuma sessao de IA rodando agora"
                                               : "confira se o Hub esta rodando no PC",
-               160, 162);
+               178, 162);
   D.setTextDatum(textdatum_t::top_left);
 }
 
 static void drawCard(const Session& s, int y, bool blinkOn) {
   uint16_t col = statusColor(s.status);
   bool alert = s.status == ST_NEEDYOU;
-  D.fillRoundRect(6, y, 308, CARD_H, 10, COL_PANEL);
+  D.fillRoundRect(CARD_X, y, CARD_W, CARD_H, 10, COL_PANEL);
   if (alert) {
     uint16_t bc = blinkOn ? COL_NEEDYOU : blend(COL_PANEL, COL_NEEDYOU, 90);
-    D.drawRoundRect(6, y, 308, CARD_H, 10, bc);
-    D.drawRoundRect(7, y + 1, 306, CARD_H - 2, 9, bc);
+    D.drawRoundRect(CARD_X, y, CARD_W, CARD_H, 10, bc);
+    D.drawRoundRect(CARD_X + 1, y + 1, CARD_W - 2, CARD_H - 2, 9, bc);
   }
-  D.fillRoundRect(9, y + 8, 4, CARD_H - 16, 2, col);
+  D.fillRoundRect(CARD_X + 3, y + 8, 4, CARD_H - 16, 2, col);
 
   uint16_t sc = sourceColor(s.source);
-  D.fillCircle(30, y + CARD_H / 2, 12, blend(COL_PANEL, sc, 70));
-  D.drawCircle(30, y + CARD_H / 2, 12, sc);
+  D.fillCircle(CARD_X + 24, y + CARD_H / 2, 12, blend(COL_PANEL, sc, 70));
+  D.drawCircle(CARD_X + 24, y + CARD_H / 2, 12, sc);
   font(&fonts::FreeSansBold9pt7b);
   D.setTextColor(sc);
   D.setTextDatum(textdatum_t::middle_center);
   char letter[2] = {sourceLetter(s.source), 0};
-  D.drawString(letter, 30, y + CARD_H / 2 + 1);
+  D.drawString(letter, CARD_X + 24, y + CARD_H / 2 + 1);
   D.setTextDatum(textdatum_t::top_left);
 
   // Selo de status.
@@ -343,27 +408,107 @@ static void drawCard(const Session& s, int y, bool blinkOn) {
   const char* lb = statusLabel(s.status);
   int cw = D.textWidth(lb) + 14;
   uint16_t chipFg = (alert && !blinkOn) ? blend(COL_PANEL, col, 150) : col;
-  pill(306 - cw, y + 7, cw, 14, blend(COL_PANEL, col, 50), chipFg, lb);
+  pill(CARD_X + CARD_W - 8 - cw, y + 7, cw, 14, blend(COL_PANEL, col, 50), chipFg, lb);
 
   font(&fonts::FreeSansBold9pt7b);
   D.setTextColor(COL_TEXT);
-  D.drawString(fit(s.title, 300 - cw - 52).c_str(), 48, y + 5);
+  D.drawString(fit(s.title, CARD_W - cw - 56).c_str(), CARD_X + 42, y + 5);
 
   font(&fonts::Font0);
   D.setTextColor(COL_MUTED);
   String d = s.source;
   if (s.profile.length()) d += "/" + s.profile;
   if (s.detail.length()) d += "  " + s.detail;
-  D.drawString(fit(d, 256).c_str(), 48, y + 30);
+  D.drawString(fit(d, CARD_W - 50).c_str(), CARD_X + 42, y + 30);
+}
+
+// Barra lateral: lista (ativa) e configurações.
+static const int SB_X = 3, SB_W = 32, SB_LIST_Y = 58, SB_CFG_Y = 98;
+
+static void sideButton(int y, bool active) {
+  if (active) {
+    D.fillRoundRect(SB_X - 1, y - 1, SB_W + 2, SB_W + 2, 9, blend(COL_BG, COL_FINISHED, 80));  // brilho
+    D.fillRoundRect(SB_X, y, SB_W, SB_W, 8, blend(COL_PANEL, COL_FINISHED, 55));
+    D.drawRoundRect(SB_X, y, SB_W, SB_W, 8, COL_FINISHED);
+    D.drawRoundRect(SB_X + 1, y + 1, SB_W - 2, SB_W - 2, 7, COL_FINISHED);
+  } else {
+    D.fillRoundRect(SB_X, y, SB_W, SB_W, 8, COL_PANEL2);
+    D.drawRoundRect(SB_X, y, SB_W, SB_W, 8, COL_BORDER);
+  }
+}
+
+static void listIcon(int x, int y, uint16_t c) {  // x,y = canto do botão
+  for (int i = 0; i < 3; i++) {
+    int yy = y + 10 + i * 6;
+    D.fillCircle(x + 10, yy, 2, c);
+    D.fillRoundRect(x + 15, yy - 1, 10, 3, 1, c);
+  }
+}
+
+static void gearWifiIcon(int x, int y, uint16_t c, uint16_t bg) {
+  int cx = x + 14, cy = y + 14;
+  for (int i = 0; i < 8; i++) {  // dentes trapezoidais
+    int a = i * 45;
+    D.fillArc(cx, cy, 6, 10, a - 11, a + 11, c);
+  }
+  D.fillCircle(cx, cy, 7, c);
+  D.fillCircle(cx, cy, 3, bg);
+  // ondas do Wi-Fi no canto inferior direito, com recorte
+  int wx = x + 23, wy = y + 27;
+  D.setClipRect(x + 2, y + 2, SB_W - 4, SB_W - 4);
+  D.fillCircle(wx, wy, 9, bg);
+  D.fillCircle(wx, wy, 1, c);
+  D.fillArc(wx, wy, 3, 4, 225, 315, c);
+  D.fillArc(wx, wy, 6, 7, 225, 315, c);
+  D.clearClipRect();
+}
+
+static void drawSidebar() {
+  sideButton(SB_LIST_Y, true);
+  listIcon(SB_X, SB_LIST_Y, COL_FINISHED);
+  sideButton(SB_CFG_Y, false);
+  gearWifiIcon(SB_X, SB_CFG_Y, COL_TEXT, COL_PANEL2);
+}
+
+// Paginador no cabeçalho, entre o título e o Wi-Fi.
+static const int PG_X = 136, PG_W = 70, PG_Y = 6, PG_H = 22;
+
+static void drawPager(int page, int pages) {
+  D.fillRoundRect(PG_X, PG_Y, PG_W, PG_H, PG_H / 2, COL_PANEL2);
+  D.drawRoundRect(PG_X, PG_Y, PG_W, PG_H, PG_H / 2, COL_BORDER);
+  int cy = PG_Y + PG_H / 2;
+  // setas
+  D.drawLine(PG_X + 14, cy - 4, PG_X + 10, cy, COL_TEXT);
+  D.drawLine(PG_X + 10, cy, PG_X + 14, cy + 4, COL_TEXT);
+  D.drawLine(PG_X + 15, cy - 4, PG_X + 11, cy, COL_TEXT);
+  D.drawLine(PG_X + 11, cy, PG_X + 15, cy + 4, COL_TEXT);
+  int rx = PG_X + PG_W;
+  D.drawLine(rx - 14, cy - 4, rx - 10, cy, COL_TEXT);
+  D.drawLine(rx - 10, cy, rx - 14, cy + 4, COL_TEXT);
+  D.drawLine(rx - 15, cy - 4, rx - 11, cy, COL_TEXT);
+  D.drawLine(rx - 11, cy, rx - 15, cy + 4, COL_TEXT);
+  String p = String(page + 1) + "/" + String(pages);
+  font(&fonts::FreeSansBold9pt7b);
+  D.setTextColor(COL_TEXT);
+  D.setTextDatum(textdatum_t::middle_center);
+  D.drawString(p.c_str(), PG_X + PG_W / 2, cy + 1);
+  D.setTextDatum(textdatum_t::top_left);
 }
 
 int uiDrawList(AppState& st, bool touched, int tx, int ty) {
   int pages = (st.sessionCount + PER_PAGE - 1) / PER_PAGE;
   if (pages < 1) pages = 1;
   if (st.listPage >= pages) st.listPage = 0;
+  drawSidebar();
+  if (touched && tx < SIDE_W + 2 && ty >= SB_CFG_Y - 6 && ty < SB_CFG_Y + SB_W + 10) return -4;
   if (st.sessionCount == 0) {
     drawEmptyState(st);
     return -1;
+  }
+  if (pages > 1) {
+    drawPager(st.listPage, pages);
+    if (touched && ty < HDR_H && tx >= PG_X - 6 && tx < PG_X + PG_W + 6)
+      return tx < PG_X + PG_W / 2 ? -3 : -2;
   }
   bool blinkOn = (millis() / 500) % 2 == 0;
   int hit = -1;
@@ -372,14 +517,7 @@ int uiDrawList(AppState& st, bool touched, int tx, int ty) {
     if (i >= st.sessionCount) break;
     int y = LIST_TOP + k * CARD_STEP;
     drawCard(st.sessions[i], y, blinkOn);
-    if (touched && inside(tx, ty, 6, y, 308, CARD_H)) hit = i;
-  }
-  if (pages > 1) {
-    String p = "<   " + String(st.listPage + 1) + " / " + String(pages) + "   >";
-    font(&fonts::Font0);
-    int w = D.textWidth(p.c_str()) + 20;
-    pill(160 - w / 2, PAGER_Y + 1, w, 13, COL_PANEL2, COL_TEXT, p.c_str());
-    if (touched && ty >= PAGER_Y - 2 && ty < FOOTER_Y) return -2;
+    if (touched && inside(tx, ty, CARD_X, y, CARD_W, CARD_H)) hit = i;
   }
   return hit;
 }
@@ -560,42 +698,75 @@ static void infoRow(int y, const char* label, const String& value, uint16_t vc =
   D.drawString(fit(value, 200).c_str(), 96, y);
 }
 
+// Botão redondo pequeno com "-" ou "+".
+static void roundPm(int x, int y, int s, bool plus, bool enabled) {
+  uint16_t c = enabled ? COL_FINISHED : COL_BORDER;
+  D.fillRoundRect(x, y, s, s, 8, blend(COL_PANEL, c, 60));
+  D.drawRoundRect(x, y, s, s, 8, c);
+  int cx = x + s / 2, cy = y + s / 2;
+  D.fillRect(cx - 6, cy - 1, 13, 3, enabled ? COL_TEXT : COL_IDLE);
+  if (plus) D.fillRect(cx - 1, cy - 6, 3, 13, enabled ? COL_TEXT : COL_IDLE);
+}
+
+static const int VOL_Y = 144, VOL_S = 26, VOL_MINUS_X = 96, VOL_PLUS_X = 232;
+
 int uiDrawSettings(AppState& st, bool touched, int tx, int ty) {
   font(&fonts::FreeSansBold9pt7b);
   D.setTextColor(COL_TEXT);
   D.drawString("Configuracoes", 10, 40);
-  D.fillRoundRect(6, 62, 308, 98, 12, COL_PANEL);
-  int y = 72;
+  D.fillRoundRect(6, 60, 308, 116, 12, COL_PANEL);
+  int y = 68;
   if (WiFi.status() == WL_CONNECTED && st.wifiSsid.length()) {
     int pct = constrain(2 * (WiFi.RSSI() + 100), 0, 100);
     infoRow(y, "Wi-Fi", st.wifiSsid + "  (" + String(pct) + "%)");
   } else {
     infoRow(y, "Wi-Fi", "sem conexao", COL_DANGER);
   }
-  y += 18;
+  y += 15;
   infoRow(y, "Hub", st.hubHost.length() ? st.hubHost + ":" + String(st.hubPort)
                                         : String("nao configurado (demo)"));
-  y += 18;
+  y += 15;
   infoRow(y, "Estado",
           st.mockMode ? String("demonstracao") : (st.hubConnected ? String("conectado") : String("sem conexao")),
           st.mockMode ? COL_NEEDYOU : (st.hubConnected ? COL_WORKING : COL_DANGER));
-  y += 18;
+  y += 15;
   infoRow(y, "Aprovar", st.hubActions ? String("pelo toque (ligado no Hub)") : String("so leitura"),
           st.hubActions ? COL_NEEDYOU : COL_WORKING);
-  y += 18;
+  y += 15;
   infoRow(y, "Aparelho", (st.ipAddress.length() ? st.ipAddress : String("-")) + "   v" DELLMONITOR_VERSION);
+
+  // Volume: [-] barra [+]  NN%
+  font(&fonts::Font0);
+  D.setTextColor(COL_MUTED);
+  D.drawString("Volume", 18, VOL_Y + VOL_S / 2 - 3);
+  roundPm(VOL_MINUS_X, VOL_Y, VOL_S, false, st.volumePct > 0);
+  roundPm(VOL_PLUS_X, VOL_Y, VOL_S, true, st.volumePct < 100);
+  int bx = VOL_MINUS_X + VOL_S + 8, bw = VOL_PLUS_X - 8 - bx, by = VOL_Y + VOL_S / 2 - 4;
+  for (int i = 0; i < 10; i++) {  // 10 segmentos
+    int sx = bx + i * bw / 10, sw = bw / 10 - 2;
+    bool on = st.volumePct >= (i + 1) * 10;
+    D.fillRoundRect(sx, by, sw, 9, 2, on ? COL_FINISHED : COL_PANEL2);
+  }
+  font(&fonts::FreeSansBold9pt7b);
+  D.setTextColor(st.volumePct ? COL_TEXT : COL_DANGER);
+  D.setTextDatum(textdatum_t::middle_left);
+  D.drawString(st.volumePct ? (String(st.volumePct) + "%").c_str() : "mudo", VOL_PLUS_X + VOL_S + 6,
+               VOL_Y + VOL_S / 2 + 1);
+  D.setTextDatum(textdatum_t::top_left);
 
   uint32_t now = millis();
   bool armed = s_forgetArmedAt && now - s_forgetArmedAt < 4000;
   if (!armed) s_forgetArmedAt = 0;
-  button(8, 168, 148, 34, COL_PANEL2, COL_TEXT, "Trocar rede");
-  button(164, 168, 148, 34, COL_DANGER, COL_BG, armed ? "Confirmar?" : "Esquecer Wi-Fi", !armed);
+  button(8, 181, 148, 30, COL_PANEL2, COL_TEXT, "Trocar rede");
+  button(164, 181, 148, 30, COL_DANGER, COL_BG, armed ? "Confirmar?" : "Esquecer Wi-Fi", !armed);
   font(&fonts::Font0);
   D.setTextColor(COL_MUTED);
-  D.drawString("< voltar", 10, 208);
+  D.drawString("< voltar", 10, 222);
   if (!touched) return 0;
-  if (inside(tx, ty, 8, 168, 148, 34)) return 2;
-  if (inside(tx, ty, 164, 168, 148, 34)) {
+  if (inside(tx, ty, VOL_MINUS_X - 8, VOL_Y - 6, VOL_S + 16, VOL_S + 12)) return 4;
+  if (inside(tx, ty, VOL_PLUS_X - 8, VOL_Y - 6, VOL_S + 16, VOL_S + 12)) return 5;
+  if (inside(tx, ty, 8, 181, 148, 30)) return 2;
+  if (inside(tx, ty, 164, 181, 148, 30)) {
     if (armed) {
       s_forgetArmedAt = 0;
       return 3;
@@ -603,7 +774,7 @@ int uiDrawSettings(AppState& st, bool touched, int tx, int ty) {
     s_forgetArmedAt = now;
     return 0;
   }
-  if (ty >= 204) return 1;
+  if (ty >= 214) return 1;
   return 0;
 }
 

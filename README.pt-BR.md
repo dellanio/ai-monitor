@@ -72,13 +72,17 @@ E quando quiser perguntar algo, é só dizer **"Hey Hermes"**.
 
 ## 🚀 Recursos principais
 
-- 🧭 **Uma tela para todos os agentes:** Claude Code, Hermes (qualquer origem: Telegram, desktop, CLI) e Timon na mesma lista, com a ferramenta ou etapa atual de cada sessão.
+- 🧭 **Uma tela para todos os agentes:** Claude Code, Codex / ChatGPT, Orca, Hermes (qualquer origem: Telegram, desktop, CLI) e Timon na mesma lista, com a ferramenta ou etapa atual de cada sessão.
 - 🔔 **Avisos que importam:** perguntas do Claude (`AskUserQuestion`), aprovação de plano (`ExitPlanMode`), pedidos de permissão e o `clarify` do Hermes viram **precisa de você**.
 - 🗣️ **Sons personalizados sem regravar:** os avisos são arquivos de áudio tocados pelo Hub. Já vem com voz em português e sinos; coloque o seu `finished.mp3` e ele vale em até 15 s. Os bipes embutidos ficam de reserva.
 - 🎙️ **Assistente de voz local:** o "Hey Hermes" é detectado no computador (Vosk, offline) e a conversa vai para um canal de voz rodando no mesmo computador.
 - 💻 **Tela Computador:** CPU, RAM, GPU, rede, processo mais pesado e bateria do PC.
 - 🛡️ **Só leitura por padrão:** o robô mostra as aprovações, mas não aprova nada a menos que você ative.
 - 🔁 **Sobe com o Windows:** um supervisor religa o Hub (e o canal de voz) no login e sempre que ele cair.
+- 🗣️ **Avisos falados por ferramenta:** "Claude terminou", "Hermes precisa de você", "ChatGPT começou"… (5 ferramentas × 3 avisos; sem o arquivo, usa o genérico).
+- 🔊 **Volume no aparelho:** Configurações → − / + de 10 em 10 %, salvo na placa.
+- 🧩 **Duas placas, um firmware:** M5Stack CoreS3 (StackChan) e LCDWiki ES3C28P 2,8" (`pio run -e es3c28p`).
+- 🎬 **Modo demonstração:** `hub/tools/demo.py` roda um roteiro (sessões, decisão pendente, rostos, tela do computador) para gravar vídeo.
 - 📶 **Configuração fácil:** na primeira vez o robô abre a rede `AIMonitor-Setup` com QR code, lista de redes e teste de conexão na hora.
 
 ---
@@ -154,6 +158,8 @@ O robô abre a rede `AIMonitor-Setup`. Conecte, abra `http://192.168.4.1`, escol
 | **Claude Code** | arquivos de sessão em `~/.claude/projects` + hooks opcionais (`hub/hooks/claude-hook.py`) | ✅ | ✅ perguntas, planos, permissões | ✅ |
 | **Hermes** | REST + WebSocket do painel com token fixo (caminho `file:`) | ✅ | ✅ `clarify` / aprovações | ✅ qualquer origem |
 | **Timon** | daemon local, só loopback, só GET | ✅ | ✅ | ✅ |
+| **Codex / ChatGPT** | registros em `~/.codex/sessions` (só leitura; app, terminal e Orca) | ✅ | — | ✅ |
+| **Orca** | sessões do Claude Code em `~/.orca` (ou `entrypoint: orca`) e sessões Codex do Orca | ✅ | ✅ | ✅ |
 
 Sessões do Hermes de voz, linha de comando avulsa, cron e ACP não tocam o som de "terminou", para não fazer barulho à toa.
 
@@ -176,6 +182,7 @@ A palavra de ativação é detectada offline no computador (Vosk `vosk-model-sma
 | `needyou.*` | precisa de você | voz: *"Preciso de você."* |
 | `finished.*` | terminou | voz: *"Terminei!"* |
 | `new.*` | sessão nova | sino suave |
+| `<aviso>-<ferramenta>.*` | por ferramenta (`finished-claude.mp3`, `needyou-hermes.mp3`…) | voz: *"Claude terminou."* |
 
 Os padrões ficam em `hub/sounds/` (alternativas em `hub/sounds/opcoes/`, gerador em `hub/sounds/gerar_sons.py`). Para usar outro, coloque um arquivo com o mesmo nome em `~/.dellmonitor/sounds/` — wav, mp3, ogg, m4a… Sons com mais de 6 s são cortados.
 

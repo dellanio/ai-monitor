@@ -59,3 +59,7 @@ voice:
   keep_s: 300          # conversa no canal fica aberta 5 min (resposta rápida na próxima vez)
   sounds_dir: ~/.dellmonitor/sounds   # needyou.* / finished.* / new.* (wav, mp3, ogg...)
   sound_max_s: 6
+
+# Codex / ChatGPT (app Codex, codex do terminal e Orca): lê ~/.codex/sessions, só leitura.
+codex:
+  enabled: false

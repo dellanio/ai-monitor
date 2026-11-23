@@ -16,6 +16,7 @@ from .hermes_client import HermesClient
 from .host_stats import HostStats
 from .state import HubState, Session
 from .timon_source import TimonSource
+from .codex_source import CodexSource
 
 
 class Hub:
@@ -43,6 +44,8 @@ class Hub:
             self.sources.append(ClaudeSource(self, config.claude))
         if config.timon.enabled:
             self.sources.append(TimonSource(self, config.timon))
+        if config.codex.enabled:
+            self.sources.append(CodexSource(self, config.codex))
         self.voice = None
         if config.voice.enabled:
             from .voice import VoiceServer
@@ -104,8 +107,8 @@ class Hub:
     async def push_sessions(self) -> None:
         await self.device.broadcast(self.state.sessions_payload())
 
-    async def push_finished(self, session_id: str, title: str) -> None:
-        await self.device.push_finished(session_id, title)
+    async def push_finished(self, session_id: str, title: str, source: str = "") -> None:
+        await self.device.push_finished(session_id, title, source)
 
     def source(self, name: str):
         for s in self.sources:

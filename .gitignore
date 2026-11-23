@@ -15,3 +15,6 @@ hub/config.yaml
 *.bin
 *.csv
 .venv/
+
+# pasta local do Hermes: tokens, sons pessoais, NVS com Wi-Fi, copia de publicacao, handoff
+hermes/

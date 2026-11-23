@@ -21,6 +21,7 @@ import hmac
 import json
 import logging
 import os
+import threading
 import time
 from http import HTTPStatus
 from typing import Any
@@ -57,15 +58,31 @@ class WakeDetector:
         self.model = Model(os.path.expanduser(model_path))
         self.phrases = [p.lower() for p in phrases]
         self._grammar = json.dumps(self.phrases + ["hermes", "[unk]"])
+        # O Vosk não aceita uso simultâneo: feed() roda em threads (to_thread) e reset() no loop;
+        # dois acessos ao mesmo reconhecedor abortavam o processo inteiro (ASSERTION_FAILED).
+        self._lock = threading.Lock()
         self.reset()
 
+    def fork(self) -> "WakeDetector":
+        """Outro detector com o mesmo modelo (um por aparelho; o modelo é carregado uma vez)."""
+        twin = object.__new__(WakeDetector)
+        twin._Rec, twin.model, twin.phrases, twin._grammar = self._Rec, self.model, self.phrases, self._grammar
+        twin._lock = threading.Lock()
+        twin.reset()
+        return twin
+
     def reset(self) -> None:
-        self.rec = self._Rec(self.model, 16000, self._grammar)
+        with self._lock:
+            self.rec = self._Rec(self.model, 16000, self._grammar)
 
     def _hit(self, text: str) -> bool:
         return any(p in text for p in self.phrases)
 
     def feed(self, pcm16k: bytes) -> bool:
+        with self._lock:
+            return self._feed(pcm16k)
+
+    def _feed(self, pcm16k: bytes) -> bool:
         if self.rec.AcceptWaveform(pcm16k):
             text = json.loads(self.rec.Result()).get("text", "")
             if text and text.replace("[unk]", "").strip():
@@ -73,7 +90,7 @@ class WakeDetector:
         else:
             text = json.loads(self.rec.PartialResult()).get("partial", "")
         if text and self._hit(text):
-            self.reset()
+            self.rec = self._Rec(self.model, 16000, self._grammar)  # já dentro do lock
             return True
         return False
 
@@ -84,6 +101,7 @@ class VoiceSession:
     def __init__(self, server: "VoiceServer", ws) -> None:
         self.server = server
         self.ws = ws
+        self.name = str((getattr(ws, "remote_address", None) or ("?",))[0])
         self.cfg = server.cfg
         self.active = False          # depois do "Hey Hermes", antes de voltar à espera
         self.last_activity = 0.0     # você falou / ela falou / terminou de tocar
@@ -91,7 +109,8 @@ class VoiceSession:
         self.thinking = False        # você falou e a resposta ainda não veio
         self.tools_open = 0          # tarefas delegadas ao Hermes em andamento
         self.busy_at = 0.0           # quando começou a espera pela resposta (teto de 180 s)
-        self.wake = server.wake
+        pick = getattr(server, "wake_for_device", None)
+        self.wake = pick() if callable(pick) else getattr(server, "wake", None)
         self._watch: asyncio.Task | None = None
 
     async def send_state(self, state: str, **extra: Any) -> None:
@@ -144,6 +163,9 @@ class VoiceSession:
 
     # --- aparelho ---
     async def on_mic(self, pcm: bytes) -> None:
+        cur = self.server.current
+        if cur is not None and cur is not self and cur.active:
+            return  # outro aparelho está conversando: este só espera
         if self.active:
             if is_speech(pcm):  # você está falando: não conta como silêncio
                 self.last_activity = time.monotonic()
@@ -158,7 +180,14 @@ class VoiceSession:
             await self.wake_up()
 
     async def wake_up(self) -> None:
-        log.info("voz: Hey Hermes")
+        cur = self.server.current
+        if cur is not None and cur is not self and cur.active:
+            log.info("voz: Hey Hermes ignorado em %s (outro aparelho conversando)", self.name)
+            return
+        if cur is not None and cur is not self:
+            self.server.link.detach(cur)
+        self.server.current = self
+        log.info("voz: Hey Hermes (%s)", self.name)
         self.active = True
         self.last_activity = time.monotonic()
         self.server.link.attach(self)
@@ -202,7 +231,7 @@ class VoiceSession:
         elif kind == "wake":  # toque/botão: o mesmo que dizer "Hey Hermes"
             await self.wake_up()
         elif kind == "sound":
-            await self.play_sound(str(msg.get("name") or ""))
+            await self.play_sound(str(msg.get("name") or ""), str(msg.get("source") or ""))
 
     async def send_sounds(self) -> None:
         names = self.server.sounds.available() if self.server.sounds else []
@@ -212,11 +241,11 @@ class VoiceSession:
         except Exception:  # noqa: BLE001
             pass
 
-    async def play_sound(self, name: str) -> None:
+    async def play_sound(self, name: str, source: str = "") -> None:
         """Aviso do monitor com o som escolhido; recusado (end sem start) se ocupado."""
         pcm = None
         if self.server.sounds and not (self.active or self.speaking or self.thinking):
-            pcm = await asyncio.to_thread(self.server.sounds.pcm, name)
+            pcm = await asyncio.to_thread(self.server.sounds.pcm, name, source)
         try:
             if pcm:
                 await self.ws.send(json.dumps({"type": "sound", "state": "start", "name": name}))
@@ -225,7 +254,7 @@ class VoiceSession:
                 for i in range(0, len(pcm), 4800):
                     await self.ws.send(pcm[i:i + 4800])
             await self.ws.send(json.dumps({"type": "sound", "state": "end", "name": name}))
-            log.info("voz: aviso %s %s", name, f"tocado ({len(pcm) / 48000:.1f} s)" if pcm else "recusado (ocupado/sem arquivo)")
+            log.info("voz: aviso %s%s %s", name, f" ({source})" if source else "", f"tocado ({len(pcm) / 48000:.1f} s)" if pcm else "recusado (ocupado/sem arquivo)")
         except Exception:  # noqa: BLE001
             pass
 
@@ -248,12 +277,18 @@ class VoiceServer:
         self.token = token
         self.wake = wake
         self.link = link or CanalLink("aimonitor", cfg.session, cfg.canal_url, cfg.keep_s, cfg.engine)
-        self.current: VoiceSession | None = None
+        self.current: VoiceSession | None = None   # aparelho com a conversa (o último que acordou)
+        self.sessions: set[VoiceSession] = set()  # todos os aparelhos conectados
         from .sounds import SoundBank
         self.sounds = SoundBank(getattr(cfg, "sounds_dir", "~/.dellmonitor/sounds"),
                                 getattr(cfg, "sound_max_s", 6.0), getattr(cfg, "sound_gain", 1.0))
         self._server = None
         self._link_idle: asyncio.Task | None = None
+
+    def wake_for_device(self):
+        """Cada aparelho tem o próprio detector (dois microfones não se misturam)."""
+        fork = getattr(self.wake, "fork", None)
+        return fork() if callable(fork) else self.wake
 
     def schedule_link_close(self) -> None:
         if self._link_idle and not self._link_idle.done():
@@ -286,7 +321,7 @@ class VoiceServer:
             self.wake = await asyncio.to_thread(WakeDetector, self.cfg.wake_model, list(self.cfg.wake_phrases))
         self._server = await serve(self._handler, self.cfg.host, self.cfg.port,
                                    process_request=self._authorize, max_size=1 << 20,
-                                   ping_interval=20, ping_timeout=20)
+                                   ping_interval=20, ping_timeout=60)  # arduinoWebSockets demora a responder enquanto toca
         log.info("voz: ouvindo em %s:%d (canal %s, frases %s)", self.cfg.host, self.cfg.port,
                  self.cfg.canal_url, list(self.cfg.wake_phrases))
 
@@ -297,14 +332,11 @@ class VoiceServer:
         await self.link.close()
 
     async def _handler(self, ws) -> None:
-        if self.current is not None:  # um aparelho por vez: o novo assume
-            try:
-                await self.current.ws.close()
-            except Exception:  # noqa: BLE001
-                pass
+        # Vários aparelhos ao mesmo tempo: todos ouvem o "Hey Hermes" e recebem os avisos;
+        # a conversa fica com o que acordou por último.
         sess = VoiceSession(self, ws)
-        self.current = sess
-        log.info("voz: aparelho conectado %s", ws.remote_address)
+        self.sessions.add(sess)
+        log.info("voz: aparelho conectado %s (%d no total)", ws.remote_address, len(self.sessions))
         await sess.send_state("idle")
         await sess.send_sounds()
         sounds_task = asyncio.create_task(sess._sounds_watch())
@@ -322,6 +354,7 @@ class VoiceServer:
             log.info("voz: link encerrado (%r)", exc)
         finally:
             sounds_task.cancel()
+            self.sessions.discard(sess)
             await sess.close()
             if self.current is sess:
                 self.current = None

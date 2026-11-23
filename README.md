@@ -72,13 +72,17 @@ And when you want to ask something, just say **"Hey Hermes"**.
 
 ## 🚀 Key Features
 
-- 🧭 **One screen for every agent:** Claude Code, Hermes (any origin: Telegram, desktop, CLI) and Timon in the same list, with the current tool or step of each session.
+- 🧭 **One screen for every agent:** Claude Code, Hermes (any origin: Telegram, desktop, CLI), Codex / ChatGPT, Orca and Timon in the same list, with the current tool or step of each session.
 - 🔔 **Real attention signals:** Claude questions (`AskUserQuestion`), plan approvals (`ExitPlanMode`), permission prompts and Hermes `clarify` all become **needs you**.
 - 🗣️ **Custom sounds without reflashing:** alerts are audio files played by the Hub. Ships with Portuguese voice clips and chimes; drop your own `finished.mp3` and it is used within 15 s. Built-in beeps remain as fallback.
 - 🎙️ **Local voice assistant:** "Hey Hermes" is detected on the computer (Vosk, offline) and the conversation goes to a voice channel running on the same computer.
 - 💻 **Computer screen:** CPU, RAM, GPU, network, top process and battery of the PC.
 - 🛡️ **Read-only by default:** the robot shows approvals but cannot approve anything unless you explicitly enable it.
 - 🔁 **Starts with Windows:** a supervisor brings the Hub (and the voice channel) back up at logon and whenever it crashes.
+- 🗣️ **Spoken alerts per tool:** "Claude finished", "Hermes needs you", "ChatGPT started"… (5 tools × 3 alerts, falls back to the generic clip).
+- 🔊 **Volume on the device:** Settings → − / + in 10 % steps, saved on the board.
+- 🧩 **Two boards, one firmware:** M5Stack CoreS3 (StackChan) and LCDWiki ES3C28P 2.8" (`pio run -e es3c28p`).
+- 🎬 **Demo mode:** `hub/tools/demo.py` plays a scripted tour (sessions, a pending decision, faces, computer screen) for videos.
 - 📶 **Friendly setup:** first boot opens an `AIMonitor-Setup` access point with QR code, network scan and live connection test.
 
 ---
@@ -154,6 +158,8 @@ The robot opens the `AIMonitor-Setup` network. Join it, open `http://192.168.4.1
 | **Claude Code** | session files in `~/.claude/projects` + optional hooks (`hub/hooks/claude-hook.py`) | ✅ | ✅ questions, plans, permissions | ✅ |
 | **Hermes** | dashboard REST + WebSocket with a fixed session token (`file:` path) | ✅ | ✅ `clarify` / approvals | ✅ any origin |
 | **Timon** | local daemon, loopback only, GET only | ✅ | ✅ | ✅ |
+| **Codex / ChatGPT** | session logs in `~/.codex/sessions` (read-only; app, CLI and Orca) | ✅ | — | ✅ |
+| **Orca** | Claude Code sessions under `~/.orca` (or `entrypoint: orca`) and Orca's Codex sessions | ✅ | ✅ | ✅ |
 
 Hermes voice, CLI one-shot, cron and ACP sessions do not play the "finished" sound, to avoid noise.
 
@@ -176,6 +182,7 @@ Wake-word detection runs offline on the computer (Vosk `vosk-model-small-en-us`)
 | `needyou.*` | needs you | voice: *"Preciso de você."* |
 | `finished.*` | finished | voice: *"Terminei!"* |
 | `new.*` | new session | soft chime |
+| `<alert>-<tool>.*` | per tool (`finished-claude.mp3`, `needyou-hermes.mp3`…) | voice: *"Claude terminou."* |
 
 Defaults live in `hub/sounds/` (alternatives in `hub/sounds/opcoes/`, generator in `hub/sounds/gerar_sons.py`). Put a file with the same name in `~/.dellmonitor/sounds/` to override it — wav, mp3, ogg, m4a… Clips longer than 6 s are trimmed.
 

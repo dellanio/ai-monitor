@@ -9,6 +9,7 @@ Speaks firmware/PROTOCOL.md exactly: the device connects to
 from __future__ import annotations
 
 import asyncio
+import time
 import hmac
 import json
 import socket
@@ -52,16 +53,24 @@ class DeviceServer:
         self.on_message = None
         self._server = None
         self._snapshot_event = asyncio.Event()
+        self._last_sent: dict[str, str] = {}
+        self._last_full = 0.0
         self._snapshot_task: asyncio.Task | None = None
         self._zc = None
         self._mdns_info = None
         self.actual_port = port
+        self.idle_timeout_s = 45.0  # aparelho manda ping a cada 15 s
 
     async def start(self) -> None:
         self._server = await serve(
             self._handler, self.host, self.port,
             process_request=self._authorize,
             max_size=64 * 1024,
+            # Sem ping de protocolo: o arduinoWebSockets do firmware não devolve o
+            # pong a tempo e a conexão caía a cada ~50 s ("keepalive ping timeout").
+            # A vida do link é de aplicação: o aparelho manda {"type":"ping"} a cada
+            # 15 s e o Hub fecha após idle_timeout_s sem nada.
+            ping_interval=None,
         )
         if self._server.sockets:
             self.actual_port = self._server.sockets[0].getsockname()[1]
@@ -142,13 +151,23 @@ class DeviceServer:
                 return
             self._snapshot_event.clear()
             await asyncio.sleep(0.05)  # coalesce bursts
-            await self.broadcast(self.state.sessions_payload())
-            for payload in self.state.usage_payloads():
-                await self.broadcast(payload)
-            await self.broadcast(self.state.cron_payload())
+            # Só manda o que mudou (o aparelho é lento para ler; reenviar tudo a
+            # cada mudança enchia o TCP e travava os envios). Tudo de novo a cada 30 s.
+            now = time.monotonic()
+            if now - self._last_full > 30:
+                self._last_sent.clear()
+                self._last_full = now
+            msgs = [self.state.sessions_payload(), *self.state.usage_payloads(), self.state.cron_payload()]
             host = self.state.host_payload()
             if host is not None:
-                await self.broadcast(host)
+                msgs.append(host)
+            for payload in msgs:
+                key = f"{payload.get('type')}:{payload.get('session_id', '')}"
+                raw = json.dumps(payload, sort_keys=True)
+                if self._last_sent.get(key) == raw:
+                    continue
+                if await self.broadcast(payload):
+                    self._last_sent[key] = raw  # pulado por demora: tenta de novo na próxima
 
     # -- auth ------------------------------------------------------------
     def _token_ok(self, presented: str | None) -> bool:
@@ -172,18 +191,26 @@ class DeviceServer:
         return connection.respond(HTTPStatus.UNAUTHORIZED, "token invalido\n")
 
     # -- wire ------------------------------------------------------------
-    async def broadcast(self, msg: dict) -> None:
+    async def broadcast(self, msg: dict) -> bool:
+        """Envia a todos; False se algum envio estourou o prazo."""
         if not self.clients:
-            return
+            return True
         raw = json.dumps(msg)
         dead = []
+        ok = True
         for ws in list(self.clients):
             try:
-                await ws.send(raw)
+                # Aparelho ocupado (tocando áudio) pode demorar a ler: não trava o Hub.
+                await asyncio.wait_for(ws.send(raw), timeout=5)
+            except asyncio.TimeoutError:
+                ok = False
+                if self.log:
+                    self.log.info("envio ao aparelho demorou >5 s (%s): pulado", msg.get("type"))
             except Exception:
                 dead.append(ws)
         for ws in dead:
             self.clients.discard(ws)
+        return ok
 
     async def _send(self, ws, msg: dict) -> None:
         await ws.send(json.dumps(msg))
@@ -206,7 +233,14 @@ class DeviceServer:
             for ap in list(self.state.pending.values()):
                 if ap.kind == "approval":
                     await self._send(ws, ap.to_protocol())
-            async for raw in ws:
+            while True:
+                try:
+                    raw = await asyncio.wait_for(ws.recv(), timeout=self.idle_timeout_s)
+                except asyncio.TimeoutError:
+                    if self.log:
+                        self.log.info("device idle %.0fs -> fechando", self.idle_timeout_s)
+                    await ws.close(code=1001, reason="idle")
+                    break
                 try:
                     msg = json.loads(raw)
                 except (ValueError, TypeError):
@@ -253,7 +287,9 @@ class DeviceServer:
     async def push_approval_cancelled(self, request_id: str) -> None:
         await self.broadcast({"type": "approval_cancelled", "request_id": request_id})
 
-    async def push_finished(self, session_id: str, title: str) -> None:
+    async def push_finished(self, session_id: str, title: str, source: str = "") -> None:
         from .state import device_text
 
-        await self.broadcast({"type": "finished", "session_id": session_id, "title": device_text(title)})
+        s = self.state.sessions.get(session_id)
+        await self.broadcast({"type": "finished", "session_id": session_id, "title": device_text(title),
+                              "source": source or (s.source if s else "")})

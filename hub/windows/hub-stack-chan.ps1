@@ -4,11 +4,12 @@
 param(
     [string]$CanalDir = "",          # pasta do canal de voz (com voz.cmd); vazio = não gerencia
     [int]$HubPort = 8790,
-    [int]$CanalPort = 4850
+    [int]$CanalPort = 4850,
+    [string]$LogDir = ""             # vazio = %LOCALAPPDATA%\hub-stack-chan
 )
 $ErrorActionPreference = "Continue"
 $hubDir = Split-Path -Parent $PSScriptRoot
-$logDir = Join-Path $env:LOCALAPPDATA "hub-stack-chan"
+$logDir = if ($LogDir) { $LogDir } else { Join-Path $env:LOCALAPPDATA "hub-stack-chan" }
 New-Item -ItemType Directory -Force -Path $logDir | Out-Null
 $log = Join-Path $logDir "supervisor.log"
 function Log($m) { "{0} {1}" -f (Get-Date -Format "yyyy-MM-dd HH:mm:ss"), $m | Add-Content -Path $log -Encoding utf8 }

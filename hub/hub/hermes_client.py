@@ -68,6 +68,7 @@ class HermesClient(Source):
         self._activity: dict[str, tuple] = {}
         self._activity_primed = False
         self.activity_poll = float(getattr(cfg, "activity_poll_s", 8) or 8)
+        self.stale_after = float(getattr(cfg, "stale_after_s", 900) or 900)
         self.finish_skip_sources = set(getattr(cfg, "finish_skip_sources", None) or ("oneshot", "acp", "cron"))
 
     # -- lifecycle -------------------------------------------------------
@@ -302,6 +303,11 @@ class HermesClient(Source):
             key = (row.get("message_count"), row.get("last_active"))
             prev = self._activity.get(sid)
             if prev is not None and prev[:2] == key:
+                la = row.get("last_active")
+                if (prev[2] == "working" and isinstance(la, (int, float))
+                        and time.time() - la > self.stale_after):
+                    self._activity[sid] = (*key, "idle")
+                    self.hub.state.set_session_status(sid, "idle", "parada")
                 continue
             if prev is None and row.get("ended_at") and primed is False:
                 self._activity[sid] = (*key, "idle")
@@ -310,6 +316,9 @@ class HermesClient(Source):
                 f"/api/sessions/{sid}/messages?limit=1&order=latest&inline_images=false")
             msgs = (tail or {}).get("messages") if isinstance(tail, dict) else None
             status, detail = self.classify_tail(msgs[-1] if msgs else None)
+            la = row.get("last_active")
+            if status == "working" and isinstance(la, (int, float)) and time.time() - la > self.stale_after:
+                status, detail = "idle", "parada"  # sem atividade há muito tempo: não está rodando
             old = prev[2] if prev else None
             self._activity[sid] = (*key, status)
             if row.get("ended_at") and prev is None and status != "finished":
@@ -404,6 +413,19 @@ class HermesClient(Source):
                     self.hub.state.touch()
                 continue
             self._known_sessions.add(sid)
+            old = self.hub.state.sessions.get(sid)
+            if old is not None:
+                # Já acompanhada (o poll de atividade sabe se está trabalhando):
+                # só atualiza título e custo. Antes isto voltava tudo para "idle"
+                # a cada sessions.changed e o aparelho não via as execuções.
+                if row.get("title"):
+                    old.title = row["title"]
+                if row.get("estimated_cost_usd") is not None:
+                    old.cost_usd = row["estimated_cost_usd"]
+                old.input_tokens = int(row.get("input_tokens") or old.input_tokens)
+                old.output_tokens = int(row.get("output_tokens") or old.output_tokens)
+                self.hub.state.touch()
+                continue
             self.hub.upsert_session(
                 Session(
                     id=sid,

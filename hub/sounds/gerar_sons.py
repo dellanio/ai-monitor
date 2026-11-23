@@ -1,4 +1,9 @@
-"""Gera os sons iniciais do AI Monitor em ~/.dellmonitor/sounds (+ alternativas em opcoes/)."""
+"""Gera os sons do AI Monitor (+ alternativas em opcoes/).
+
+Destino: argumento 1 ou ~/.dellmonitor/sounds. ``--ferramentas`` gera só as falas por
+ferramenta ("Claude terminou", "Hermes precisa de você", ...), que o Hub toca como
+``<aviso>-<fonte>.*`` antes do som genérico.
+"""
 import asyncio
 import wave
 from pathlib import Path
@@ -6,7 +11,11 @@ from pathlib import Path
 import edge_tts
 import numpy as np
 
-D = Path.home() / ".dellmonitor" / "sounds"
+import sys
+
+_args = [a for a in sys.argv[1:] if not a.startswith("--")]
+D = Path(_args[0]) if _args else Path.home() / ".dellmonitor" / "sounds"
+SO_FERRAMENTAS = "--ferramentas" in sys.argv
 O = D / "opcoes"
 O.mkdir(parents=True, exist_ok=True)
 SR = 24000
@@ -36,7 +45,25 @@ async def tts(text, path, voice="pt-BR-FranciscaNeural", rate="+5%"):
     await edge_tts.Communicate(text, voice, rate=rate).save(str(path))
 
 
+# fonte do Hub -> nome falado
+FERRAMENTAS = {"hermes": "Hermes", "claude": "Claude", "codex": "ChatGPT", "timon": "Timon", "orca": "Orca"}
+ACOES = {"finished": "{n} terminou.", "needyou": "{n} precisa de você.", "new": "{n} começou."}
+
+
+async def ferramentas():
+    for src, nome in FERRAMENTAS.items():
+        for aviso, frase in ACOES.items():
+            for old in D.glob(f"{aviso}-{src}.*"):
+                old.unlink()
+            await tts(frase.format(n=nome), D / f"{aviso}-{src}.mp3")
+
+
 async def main():
+    if SO_FERRAMENTAS:
+        await ferramentas()
+        for p in sorted(D.glob("*-*.mp3")):
+            print(p.name, p.stat().st_size)
+        return
     # alternativas
     save_wav(O / "sino-terminou.wav", bell([1046.5, 1318.5, 1568.0]))          # dó-mi-sol subindo
     save_wav(O / "sino-precisa.wav", bell([1568.0, 1174.7, 1568.0, 1174.7], gap=0.16))

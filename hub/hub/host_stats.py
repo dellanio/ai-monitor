@@ -29,6 +29,7 @@ class HostStats:
         self._clock = time.monotonic  # override in tests for stable rates
         if self._psutil is not None:
             self._prime_processes()
+            self._cpu_pct()  # primeira amostra da CPU
 
     @property
     def available(self) -> bool:
@@ -46,11 +47,26 @@ class HostStats:
         except Exception:
             pass
 
+    def _cpu_pct(self) -> float:
+        """CPU desde a amostra anterior, com estado próprio. O cpu_percent(None)
+        do psutil guarda o estado no módulo: outra chamada no processo zerava a
+        janela e a tela mostrava "CPU 0%" de vez em quando."""
+        t = self._psutil.cpu_times()
+        total = sum(t)
+        idle = t.idle
+        prev = getattr(self, "_prev_cpu", None)
+        self._prev_cpu = (total, idle)
+        if prev is None or total <= prev[0]:
+            return float(getattr(self, "_last_cpu", 0.0))
+        busy = 1.0 - (idle - prev[1]) / (total - prev[0])
+        self._last_cpu = max(0.0, min(100.0, busy * 100.0))
+        return self._last_cpu
+
     def collect(self) -> dict | None:
         """One sample, or None when psutil is unavailable."""
         if self._psutil is None:
             return None
-        cpu = self._psutil.cpu_percent(interval=None)
+        cpu = self._cpu_pct()
         mem = self._psutil.virtual_memory().percent
         top_name, top_pct = self._top_process()
         down, up = self._net_rates()

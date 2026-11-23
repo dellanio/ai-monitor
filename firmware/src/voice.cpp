@@ -14,6 +14,7 @@ namespace {
 WebSocketsClient vws;
 bool wsEnabled = false;
 volatile VoiceState g_state = VOICE_OFF;
+volatile bool g_idlePending = false;  // "idle" chegou durante a fala
 volatile bool g_conn = false;
 volatile uint32_t g_wakes = 0;
 volatile bool g_stopReq = false;
@@ -43,6 +44,7 @@ uint32_t lastBinMs = 0;
 const char* const SOUND_NAMES[] = {"needyou", "finished", "new"};
 constexpr uint8_t N_SOUNDS = 3;
 volatile uint8_t soundAvail = 0;
+char soundSrc[12] = "";           // ferramenta do aviso pedido
 volatile int8_t soundReq = -1;     // pedido do loop principal; a tarefa de voz envia
 volatile bool soundWaiting = false; // pediu e o áudio ainda não terminou
 uint32_t soundReqMs = 0;
@@ -85,6 +87,8 @@ QueueHandle_t toneQ = nullptr;
 uint32_t toneUntil = 0;
 uint32_t lastSpkUse = 0;
 
+uint8_t g_spkVolume = SPEAKER_VOLUME;  // 0..255, ajustável nas Configurações
+
 enum Mode : uint8_t { M_NONE, M_MIC, M_SPK };
 Mode mode = M_NONE;
 
@@ -92,7 +96,7 @@ void toSpeaker() {
   if (mode == M_SPK) return;
   if (mode == M_MIC) M5.Mic.end();
   M5.Speaker.begin();
-  M5.Speaker.setVolume(SPEAKER_VOLUME);
+  M5.Speaker.setVolume(g_spkVolume);
   mode = M_SPK;
 }
 
@@ -125,7 +129,15 @@ void finishSpeaking(bool notify) {
     return;
   }
   if (notify) sendJson("{\"type\":\"played\"}");
-  if (g_state == VOICE_SPEAKING) g_state = VOICE_LISTENING;  // o Hub manda "idle" ao fim da conversa
+  // O "idle" do Hub pode chegar enquanto a resposta ainda toca: aplica agora.
+  // (Antes ele era descartado e o robô ficava preso em "ouvindo", recusando
+  // os avisos falados do monitor.)
+  if (g_idlePending) {
+    g_idlePending = false;
+    g_state = VOICE_IDLE;
+  } else if (g_state == VOICE_SPEAKING) {
+    g_state = VOICE_LISTENING;  // o Hub manda "idle" ao fim da conversa
+  }
 }
 
 void onEvent(WStype_t type, uint8_t* payload, size_t len) {
@@ -139,6 +151,7 @@ void onEvent(WStype_t type, uint8_t* payload, size_t len) {
       if (g_conn) Serial.println("[voz] desconectado");
       g_conn = false;
       g_state = VOICE_OFF;
+      g_idlePending = false;
       soundAvail = 0;
       soundWaiting = false;
       break;
@@ -191,7 +204,9 @@ void onEvent(WStype_t type, uint8_t* payload, size_t len) {
       const char* st = doc["state"] | "";
       if (!strcmp(st, "idle")) {
         if (!outActive) g_state = VOICE_IDLE;
+        else g_idlePending = true;
       } else if (!strcmp(st, "listening")) {
+        g_idlePending = false;
         g_state = VOICE_LISTENING;
         g_wakes = g_wakes + 1;  // sem bipe: trocar para o alto-falante cortaria o começo da sua frase
       } else if (!strcmp(st, "thinking")) {
@@ -271,8 +286,9 @@ void voiceTask(void*) {
     if (soundReq >= 0) {
       int8_t i = soundReq;
       soundReq = -1;
-      char js[48];
-      snprintf(js, sizeof js, "{\"type\":\"sound\",\"name\":\"%s\"}", SOUND_NAMES[i]);
+      char js[80];
+      snprintf(js, sizeof js, "{\"type\":\"sound\",\"name\":\"%s\",\"source\":\"%s\"}", SOUND_NAMES[i],
+               soundSrc);
       sendJson(js);
     }
     if (soundWaiting && !soundMode && now - soundReqMs > 3000) soundWaiting = false;  // sem resposta
@@ -337,7 +353,7 @@ bool voiceSoundBusy() {
          soundWaiting;
 }
 
-bool voiceSound(const char* name) {
+bool voiceSound(const char* name, const char* source) {
   if (!g_conn || g_state != VOICE_IDLE || outActive || soundWaiting) {
     Serial.printf("[voz] aviso %s sem Hub: conn %d estado %d fala %d pendente %d sons 0x%02x\n", name, g_conn,
                   (int)g_state, outActive, soundWaiting, soundAvail);
@@ -347,6 +363,7 @@ bool voiceSound(const char* name) {
     if (strcmp(name, SOUND_NAMES[i]) || !(soundAvail & (1 << i))) continue;
     soundReqMs = millis();
     soundWaiting = true;
+    strlcpy(soundSrc, source ? source : "", sizeof soundSrc);
     soundReq = i;
     return true;
   }
@@ -355,3 +372,9 @@ bool voiceSound(const char* name) {
 
 void voiceStopSpeaking() { g_stopReq = true; }
 uint32_t voiceWakeCount() { return g_wakes; }
+
+void voiceSetVolume(uint8_t pct) {
+  if (pct > 100) pct = 100;
+  g_spkVolume = (uint8_t)((uint16_t)SPEAKER_VOLUME * pct / 100);
+  M5.Speaker.setVolume(g_spkVolume);
+}

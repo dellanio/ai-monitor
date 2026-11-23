@@ -455,6 +455,16 @@ class _StubPsutil:
     def cpu_percent(self, interval=None):
         return 34.4
 
+    def cpu_times(self):
+        """Cada leitura avança 1000 ticks, 65,6% ociosos -> 34,4% de CPU."""
+        self._ticks = getattr(self, "_ticks", 0) + 1
+        k = self._ticks
+
+        class T(tuple):
+            idle = property(lambda s: s[1])
+
+        return T((344.0 * k, 656.0 * k))
+
     def virtual_memory(self):
         class V:
             percent = 61.2
@@ -544,6 +554,27 @@ async def test_device_without_token_is_rejected():
                 await FakeDevice().connect(hub.device.actual_port, token=bad)
             assert "401" in str(exc.value)
         assert not hub.device.clients
+    finally:
+        await hub.stop()
+
+
+async def test_device_link_lives_on_app_ping_and_closes_when_silent():
+    """Sem ping de protocolo (o firmware não devolve pong a tempo): o link vive
+    dos pings de aplicação e o Hub fecha um aparelho mudo após idle_timeout_s."""
+    hub = Hub(make_config())
+    try:
+        await hub.start()
+        hub.device.idle_timeout_s = 0.6
+        dev = FakeDevice()
+        await dev.connect(hub.device.actual_port)
+        await wait_until(lambda: len(hub.device.clients) == 1)
+        for _ in range(4):  # 1,2 s no total, sempre com ping antes do limite
+            await dev._ws.send(json.dumps({"type": "ping"}))
+            await dev.wait_for("pong", timeout=2)
+            await asyncio.sleep(0.3)
+        assert len(hub.device.clients) == 1
+        await wait_until(lambda: not hub.device.clients, timeout=3)  # mudo -> fechado
+        await dev.close()
     finally:
         await hub.stop()
 

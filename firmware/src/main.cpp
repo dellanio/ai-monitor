@@ -4,6 +4,7 @@
 //        CONFIGURACOES (pressão longa de 2 s no cabeçalho).
 // Hardware: M5Stack CoreS3 (ESP32-S3, 320x240 touch, 8 MB PSRAM).
 #include <Arduino.h>
+#include "hw.h"
 #include <M5Unified.h>
 #include <WiFi.h>
 
@@ -21,8 +22,6 @@ AppState g_app;
 AppState* g_state = &g_app;  // usado pelo hub_client.cpp
 
 static Screen g_screen = SCR_LIST;
-static bool g_alertPending = false;  // beep + aceno uma vez
-static bool g_finishedPending = false;  // "plim" de tarefa terminada
 // Tela Computador: toque curto volta; segurar 2 s fixa/solta (fixada, o
 // rosto não entra e toque curto não sai; avisos continuam tomando a tela).
 static bool g_statsPinned = false;
@@ -38,9 +37,11 @@ static FaceMood g_glanceMood = MOOD_LOOK_LEFT;
 // ---------------------------------------------------------------------------
 // Callbacks do Hub
 // ---------------------------------------------------------------------------
+static String g_alertSrc;  // ferramenta do último "precisa de você" (lembrete)
+
 static void onApprovalCb(const Approval& ap) {
-  (void)ap;
-  g_alertPending = true;  // beep + aceno no loop (não bloquear o WS)
+  g_alertSrc = ap.source;
+  sndPush(g_app, SND_NEEDYOU, ap.source);  // beep + aceno no loop (não bloquear o WS)
   g_app.lastTouchMs = millis();
   g_app.lastActivityMs = millis();
   g_app.approvalDismissedId = "";
@@ -55,7 +56,7 @@ static void onFinishedCb(const Session& s) {
   g_app.lastFinishedTitle = s.title;
   g_app.lastFinishedMs = millis();
   g_app.lastActivityMs = millis();
-  g_finishedPending = true;  // "plim" no loop
+  sndPush(g_app, SND_FINISHED, s.source);  // "plim" no loop
 }
 
 // ---------------------------------------------------------------------------
@@ -69,8 +70,17 @@ static void onFinishedCb(const Session& s) {
 //   sessão nova     : toque curto e baixo
 // Todos os sons passam pela tarefa de voz (microfone e alto-falante dividem o I2S).
 // Primeiro tenta o som escolhido no notebook (Hub); sem ele, os toques de sempre.
+// Ferramenta que espera você agora (para o lembrete repetido).
+static String needYouSource() {
+  if (g_app.approval.active && g_app.approval.source.length()) return g_app.approval.source;
+  for (int i = 0; i < g_app.sessionCount; i++)
+    if (g_app.sessions[i].status == ST_NEEDYOU) return g_app.sessions[i].source;
+  return g_alertSrc;
+}
+
 static void alertNow() {
-  bool hub = voiceSound("needyou");
+  String src = needYouSource();
+  bool hub = voiceSound("needyou", src.c_str());
   Serial.printf("[som] precisa de voce: %s\n", hub ? "arquivo do Hub" : "toque embutido");
   if (!hub) {
     voiceTone(880, 140, 10);
@@ -79,16 +89,16 @@ static void alertNow() {
   servoNod();
 }
 
-static void chimeFinished() {
-  bool hub = voiceSound("finished");
+static void chimeFinished(const String& src) {
+  bool hub = voiceSound("finished", src.c_str());
   Serial.printf("[som] terminou: %s\n", hub ? "arquivo do Hub" : "toque embutido");
   if (hub) return;
   voiceTone(1568, 90, 10);
   voiceTone(2093, 140);
 }
 
-static void tickNew() {
-  if (!voiceSound("new")) voiceTone(660, 60);
+static void tickNew(const String& src) {
+  if (!voiceSound("new", src.c_str())) voiceTone(660, 60);
 }
 
 static uint32_t g_lastNagMs = 0;
@@ -96,22 +106,19 @@ static uint8_t g_nags = 0;
 
 static void playPendingSounds(uint32_t now) {
   if (voiceSoundBusy()) return;
-  if (g_app.sndNeedYou || g_alertPending) {
-    g_app.sndNeedYou = 0;
-    g_alertPending = false;
-    g_lastNagMs = now;
-    g_nags = 0;
-    alertNow();
-    return;
-  }
-  if (g_finishedPending) {
-    g_finishedPending = false;
-    chimeFinished();
-    return;
-  }
-  if (g_app.sndNew) {
-    g_app.sndNew = 0;
-    tickNew();
+  uint8_t kind;
+  String src;
+  if (sndPop(g_app, kind, src)) {
+    if (kind == SND_NEEDYOU) {
+      g_alertSrc = src;
+      g_lastNagMs = now;
+      g_nags = 0;
+      alertNow();
+    } else if (kind == SND_FINISHED) {
+      chimeFinished(src);
+    } else {
+      tickNew(src);
+    }
     return;
   }
   // Lembrete enquanto algo espera você.
@@ -143,15 +150,16 @@ static void runPortalForever() {
 
 void setup() {
   Serial.begin(115200);
-  auto cfg = M5.config();
-  M5.begin(cfg);
+  hwBegin();
+  Serial.println("[placa] " BOARD_NAME);
   // Paisagem 320x240 no StackChan: escolhe a rotação que dá largura > altura.
-  M5.Display.setRotation(DISPLAY_ROTATION);
-  if (M5.Display.width() < M5.Display.height()) M5.Display.setRotation((DISPLAY_ROTATION + 1) % 4);
-  M5.Display.setBrightness(160);
-  M5.Speaker.setVolume(SPEAKER_VOLUME);
-  Serial.printf("[tela] rotacao %d -> %dx%d\n", M5.Display.getRotation(),
-                M5.Display.width(), M5.Display.height());
+  DISP.setRotation(DISPLAY_ROTATION);
+  if (DISP.width() < DISP.height()) DISP.setRotation((DISPLAY_ROTATION + 1) % 4);
+  DISP.setBrightness(160);
+  g_app.volumePct = settingsLoadVolume();
+  voiceSetVolume(g_app.volumePct);
+  Serial.printf("[tela] rotacao %d -> %dx%d\n", DISP.getRotation(),
+                DISP.width(), DISP.height());
   gfxBegin();
   faceBegin();
   uiBootScreen("iniciando...");
@@ -230,15 +238,22 @@ static void updateFace(uint32_t now) {
       g_glanceUntil = 0;
     }
   }
+  if (g_app.demoMood >= 0 && g_app.demoMood < MOOD_COUNT) {
+    m = (FaceMood)g_app.demoMood;
+    static const uint16_t inks[MOOD_COUNT] = {INK_NEUTRAL, INK_WORKING, INK_FINISHED, INK_WORKING,
+                                              INK_SAD, INK_SLEEPING, INK_NEUTRAL, INK_NEUTRAL};
+    ink = inks[m];
+  }
   faceSetMood(m, ink);
   faceUpdate(now);
   uiDrawFaceOverlay(g_app, now);
 }
 
+static uint32_t g_touchCount = 0;
 static uint32_t g_loopMax = 0, g_loopLog = 0, g_loopPrev = 0;
 
 void loop() {
-  M5.update();
+  hwUpdate();
   uint32_t now = millis();
   if (g_loopPrev) {
     uint32_t dt = now - g_loopPrev;
@@ -246,6 +261,11 @@ void loop() {
   }
   g_loopPrev = now;
   if (now - g_loopLog > 10000UL) {
+    if (now < 70000UL) Serial.printf("[placa] %s\n", hwInfo());
+    extern uint32_t g_presentMaxUs, g_frames;
+    Serial.printf("[diag] quadros %lu em 10 s, envio max %lums, toques %lu\n", (unsigned long)g_frames,
+                  (unsigned long)(g_presentMaxUs / 1000), (unsigned long)g_touchCount);
+    g_presentMaxUs = 0; g_frames = 0; g_touchCount = 0;
     Serial.printf("[diag] tela %d, loop max %lums, wifi %d dBm, hub %d, voz %d/%d\n", (int)g_screen,
                   (unsigned long)g_loopMax, WiFi.RSSI(), g_app.hubConnected ? 1 : 0,
                   voiceConnected() ? 1 : 0, (int)voiceState());
@@ -255,14 +275,36 @@ void loop() {
 
   int tx = 0, ty = 0;
   bool touched = uiReadTouch(tx, ty);
+  // Bancada pela USB: "S" = captura do quadro; "T x,y" = toque simulado.
+  static String s_cmd;
+  while (Serial.available()) {
+    char c = (char)Serial.read();
+    if (c == '\n' || c == '\r') {
+      if (s_cmd == "S") gfxDumpSerial();
+      else if (s_cmd.startsWith("T ")) {
+        int comma = s_cmd.indexOf(',');
+        if (comma > 2) {
+          tx = s_cmd.substring(2, comma).toInt();
+          ty = s_cmd.substring(comma + 1).toInt();
+          touched = true;
+        }
+      }
+      s_cmd = "";
+    } else if (s_cmd.length() < 24) {
+      s_cmd += c;
+    }
+  }
   if (touched) {
+    g_touchCount++;
+    Serial.printf("[toque] %d,%d tela %d\n", tx, ty, (int)g_screen);
     g_app.lastTouchMs = now;
     g_app.lastActivityMs = now;
   }
 
   // Pressão longa (2 s) no cabeçalho: Configurações.
-  auto td = M5.Touch.getDetail();
-  if (td.isPressed() && td.y < HDR_H && g_screen != SCR_FACE && g_screen != SCR_STATS) {
+  int hx = 0, hy = 0;
+  bool held = hwTouchHeld(hx, hy);
+  if (held && hy < HDR_H && g_screen != SCR_FACE && g_screen != SCR_STATS) {
     if (g_headerPressStart == 0) g_headerPressStart = now;
     if (now - g_headerPressStart > 2000UL) {
       g_headerPressStart = 0;
@@ -286,6 +328,15 @@ void loop() {
   }
 
   hubLoop(g_app);
+
+  // Demonstração pedida pelo Hub (hub/tools/demo.py).
+  if (g_app.demoScreen >= 0) {
+    static const Screen map[3] = {SCR_LIST, SCR_STATS, SCR_FACE};
+    g_screen = map[g_app.demoScreen];
+    g_app.demoScreen = -1;
+    g_app.lastTouchMs = now;  // não cai no rosto sozinho logo em seguida
+    if (g_screen == SCR_FACE) faceInvalidate();
+  }
 
   // Aprovação nova assume a tela (exceto se o usuário mandou "ver depois").
   if (g_app.approval.active && g_screen != SCR_APPROVAL &&
@@ -323,12 +374,20 @@ void loop() {
       uiDrawHeader(g_app, false);
       int hit = uiDrawList(g_app, touched, tx, ty);
       uiDrawFooter(g_app);
-      if (touched && ty >= FOOTER_Y) {
+      int fh = touched ? uiFooterHit(tx, ty) : 0;
+      int pages = max(1, (g_app.sessionCount + PER_PAGE - 1) / PER_PAGE);
+      if (fh == 2) {
         g_screen = SCR_STATS;
         g_statsPressStart = now;   // o toque que abriu não conta ao soltar
         g_statsHoldDone = true;
+      } else if (fh == 1) {
+        // pílula do Hub: só informativa
       } else if (hit == -2) {
-        g_app.listPage++;
+        g_app.listPage = (g_app.listPage + 1) % pages;
+      } else if (hit == -3) {
+        g_app.listPage = (g_app.listPage + pages - 1) % pages;
+      } else if (hit == -4) {
+        g_screen = SCR_SETTINGS;
       } else if (hit >= 0) {
         g_app.selectedSession = hit;
         g_screen = SCR_DETAIL;
@@ -356,7 +415,7 @@ void loop() {
     }
     case SCR_STATS: {
       uiDrawStats(g_app, false, tx, ty);
-      if (td.isPressed()) {
+      if (held) {
         if (g_statsPressStart == 0) {
           g_statsPressStart = now;
           g_statsHoldDone = false;
@@ -377,9 +436,16 @@ void loop() {
     }
     case SCR_SETTINGS: {
       uiDrawBackground();
-      uiDrawHeader(g_app, false);
+      uiDrawHeader(g_app, false, false);
       int act = uiDrawSettings(g_app, touched, tx, ty);
-      if (act == 1) {
+      if (act == 4 || act == 5) {
+        int v = (int)g_app.volumePct + (act == 5 ? 10 : -10);
+        g_app.volumePct = (uint8_t)constrain(v, 0, 100);
+        voiceSetVolume(g_app.volumePct);
+        settingsSaveVolume(g_app.volumePct);
+        if (g_app.volumePct) voiceTone(1046, 90);  // amostra no volume novo
+        Serial.printf("[som] volume %u%%\n", g_app.volumePct);
+      } else if (act == 1) {
         g_screen = SCR_LIST;
       } else if (act == 2) {
         uiBootScreen("abrindo portal de Wi-Fi...");

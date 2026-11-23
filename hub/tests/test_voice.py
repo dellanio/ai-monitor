@@ -123,3 +123,38 @@ def test_voice_session_routes_mic_only_after_wake_and_forwards_reply():
             srv._server.close()
 
     asyncio.run(run())
+
+
+def test_two_devices_stay_connected_and_only_the_waker_talks():
+    async def run():
+        from websockets.asyncio.client import connect
+        from websockets.asyncio.server import serve
+
+        cfg = VoiceConfig(enabled=True, host="127.0.0.1", port=0, wake_model="", follow_up_s=5)
+        wake, link = FakeWake(), FakeLink()
+        srv = VoiceServer(cfg, "token-de-teste-123", wake=wake, link=link)
+        srv._server = await serve(srv._handler, "127.0.0.1", 0, process_request=srv._authorize)
+        port = srv._server.sockets[0].getsockname()[1]
+        url = f"ws://127.0.0.1:{port}/voice?token=token-de-teste-123"
+        try:
+            async with connect(url) as a, connect(url) as b:
+                for ws in (a, b):
+                    assert json.loads(await ws.recv())["state"] == "idle"
+                    assert json.loads(await ws.recv())["type"] == "sounds"
+                assert len(srv.sessions) == 2           # o segundo não derruba o primeiro
+                wake.fire = True
+                await b.send(b"\2\0" * 960)            # b acorda
+                assert json.loads(await b.recv())["state"] == "listening"
+                await a.send(b"\2\0" * 960)            # a é ignorado enquanto b conversa
+                wake.fire = False
+                await asyncio.sleep(0.1)
+                await b.send(b"\3\0" * 960)
+                await a.send(b"\5\0" * 960)
+                await asyncio.sleep(0.1)
+                assert link.pushed == b"\3\0" * 960     # só o microfone de b vai ao canal
+                assert srv.current is not None and srv.current.ws is not None
+                assert len(srv.sessions) == 2
+        finally:
+            srv._server.close()
+
+    asyncio.run(run())

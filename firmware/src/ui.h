@@ -23,16 +23,21 @@ static const int LIST_TOP = 54;
 static const int CARD_H = 46;
 static const int CARD_STEP = 50;
 static const int PER_PAGE = 3;
-static const int PAGER_Y = 204;
-static const int FOOTER_Y = 220;
+static const int SIDE_W = 38;     // barra lateral (lista / configurações)
+static const int CARD_X = 42;     // início do conteúdo à direita da barra
+static const int CARD_W = 272;
+static const int FOOTER_Y = 205;  // rodapé com as pílulas "Hub" e "CPU/RAM"
 
 // Humor atual e sua tinta (o rosto e o avatar acompanham o estado).
 FaceMood uiMoodFor(const AppState& st, uint32_t now, uint16_t& ink);
 
 void uiDrawBackground();
-void uiDrawHeader(const AppState& st, bool blink);
+void uiDrawHeader(const AppState& st, bool blink, bool limits = true);
 void uiDrawFooter(const AppState& st);
-// Lista paginada. Retorna o índice tocado, -2 se tocou no paginador, -1 nada.
+// Toque no rodapé: 1 = pílula do Hub, 2 = pílula CPU/RAM (abre Computador), 0 = nada.
+int uiFooterHit(int tx, int ty);
+// Lista paginada com barra lateral e paginador no cabeçalho. Retorna o índice
+// tocado, -2 próxima página, -3 página anterior, -4 botão de configurações, -1 nada.
 int uiDrawList(AppState& st, bool touched, int tx, int ty);
 // Detalhe. 0 = nada, 1 = voltar, 2 = aprovar 1x, 4 = negar.
 int uiDrawDetail(AppState& st, bool touched, int tx, int ty);
@@ -41,7 +46,8 @@ int uiDrawApproval(AppState& st, bool touched, int tx, int ty);
 // Tela COMPUTADOR. 1 = voltar.
 int uiDrawStats(AppState& st, bool touched, int tx, int ty);
 void uiDrawPinBadge();  // selo "FIXADA" na tela Computador
-// Configurações. 0 = nada, 1 = voltar, 2 = trocar rede, 3 = esquecer Wi-Fi.
+// Configurações. 0 = nada, 1 = voltar, 2 = trocar rede, 3 = esquecer Wi-Fi,
+// 4 = volume -, 5 = volume +.
 int uiDrawSettings(AppState& st, bool touched, int tx, int ty);
 // Sobreposições da tela do rosto (relógio, estado). O GIF já está em G().
 void uiDrawFaceOverlay(const AppState& st, uint32_t now);

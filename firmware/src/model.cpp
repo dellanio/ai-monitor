@@ -103,12 +103,12 @@ void replaceSessions(AppState& st, const Session* incoming, int n) {
         st.lastFinishedMs = now;
       }
       if (old->status != s.status) st.lastActivityMs = now;
-      if (!quiet && s.status == ST_NEEDYOU && old->status != ST_NEEDYOU) st.sndNeedYou++;
+      if (!quiet && s.status == ST_NEEDYOU && old->status != ST_NEEDYOU) sndPush(st, SND_NEEDYOU, s.source);
     } else {
       st.lastActivityMs = now;
       if (!quiet) {
-        if (s.status == ST_NEEDYOU) st.sndNeedYou++;
-        else if (s.status == ST_WORKING) st.sndNew++;
+        if (s.status == ST_NEEDYOU) sndPush(st, SND_NEEDYOU, s.source);
+        else if (s.status == ST_WORKING) sndPush(st, SND_NEW, s.source);
       }
     }
     w++;
@@ -124,4 +124,24 @@ int countStatus(const AppState& st, SessionStatus s) {
   for (int i = 0; i < st.sessionCount; i++)
     if (st.sessions[i].status == s) n++;
   return n;
+}
+
+void sndPush(AppState& st, uint8_t kind, const String& src) {
+  if (st.sndCount == AppState::SND_Q) {  // cheia: perde o mais antigo
+    st.sndHead = (st.sndHead + 1) % AppState::SND_Q;
+    st.sndCount--;
+  }
+  uint8_t i = (st.sndHead + st.sndCount) % AppState::SND_Q;
+  st.sndKind[i] = kind;
+  st.sndSrc[i] = src;
+  st.sndCount++;
+}
+
+bool sndPop(AppState& st, uint8_t& kind, String& src) {
+  if (!st.sndCount) return false;
+  kind = st.sndKind[st.sndHead];
+  src = st.sndSrc[st.sndHead];
+  st.sndHead = (st.sndHead + 1) % AppState::SND_Q;
+  st.sndCount--;
+  return true;
 }
